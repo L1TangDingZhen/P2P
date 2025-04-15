@@ -8,6 +8,8 @@ namespace P2P
         public static void Main(string[] args)
         {
             var builder = WebApplication.CreateBuilder(args);
+
+            // comment out when publishing
             builder.WebHost.ConfigureKestrel(serverOptions =>
             {
                 serverOptions.ListenAnyIP(5235); // 监听所有网络接口的5235端口
