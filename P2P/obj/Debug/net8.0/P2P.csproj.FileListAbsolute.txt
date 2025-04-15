@@ -33,3 +33,4 @@ C:\Users\11427\Desktop\P2P\P2P\obj\Debug\net8.0\refint\P2P.dll
 C:\Users\11427\Desktop\P2P\P2P\obj\Debug\net8.0\P2P.pdb
 C:\Users\11427\Desktop\P2P\P2P\obj\Debug\net8.0\P2P.genruntimeconfig.cache
 C:\Users\11427\Desktop\P2P\P2P\obj\Debug\net8.0\ref\P2P.dll
+C:\Users\11427\Desktop\P2P\P2P\obj\Debug\net8.0\P2P.sourcelink.json

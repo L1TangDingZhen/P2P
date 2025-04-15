@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>CORS Bridge</title>
+</head>
+<body>
+    <h1>CORS Bridge</h1>
+    <p>This file helps with CORS issues when testing across different devices.</p>
+    <p>To use this bridge, open this file in your browser and run the API from this same domain.</p>
+
+    <script>
+        // 这个脚本帮助在网络环境中跨域访问API
+        window.addEventListener('message', function(event) {
+            if (event.data && event.data.type === 'corsRequest') {
+                const { url, method, headers, body, requestId } = event.data;
+                
+                fetch(url, {
+                    method: method || 'GET',
+                    headers: headers || {},
+                    body: body ? JSON.stringify(body) : undefined,
+                    mode: 'cors',
+                    credentials: 'include'
+                })
+                .then(response => response.json())
+                .then(data => {
+                    window.parent.postMessage({
+                        type: 'corsResponse',
+                        requestId,
+                        success: true,
+                        data
+                    }, '*');
+                })
+                .catch(error => {
+                    window.parent.postMessage({
+                        type: 'corsResponse',
+                        requestId,
+                        success: false,
+                        error: error.toString()
+                    }, '*');
+                });
+            }
+        });
+
+        // 通知父窗口桥接准备就绪
+        window.parent.postMessage({ type: 'corsBridgeReady' }, '*');
+    </script>
+</body>
+</html>
