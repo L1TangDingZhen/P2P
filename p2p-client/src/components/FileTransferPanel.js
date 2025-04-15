@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Form, Button, ProgressBar, Alert } from 'react-bootstrap';
 import SignalRService from '../services/SignalRService';
 
@@ -33,12 +33,127 @@ const FileTransferPanel = ({ userId, deviceId }) => {
   // For incoming transfers
   const [incomingFiles, setIncomingFiles] = useState({});
   const [completedFiles, setCompletedFiles] = useState([]);
-  const [processedFileIds] = useState(new Set()); // 跟踪已处理的文件ID，避免重复
+  const processedFileIdsRef = useRef(new Set());
 
   // Constants for file transfer
   const CHUNK_SIZE = 50 * 1024; // 50 KB chunks
 
   useEffect(() => {
+    // 在 useEffect 内部定义事件处理函数，避免依赖项问题
+    const handleReceiveFileMetadata = (message) => {
+      const { fileMetadata } = message;
+      
+      // Initialize data structures for the incoming file
+      setIncomingFiles(prev => ({
+        ...prev,
+        [fileMetadata.fileId]: {
+          ...fileMetadata,
+          receivedChunks: {},
+          totalChunks: 0,
+          receivedSize: 0,
+          progress: 0,
+          sender: message.senderDeviceId
+        }
+      }));
+    };
+
+    const processCompletedFile = (fileId) => {
+      setIncomingFiles(prev => {
+        if (!prev[fileId]) return prev;
+    
+        const file = prev[fileId];
+        
+        // 组装文件块并创建下载URL
+        setCompletedFiles(prevCompleted => {
+          // 检查文件是否已存在于完成列表中
+          const exists = prevCompleted.some(f => f.fileId === fileId);
+          if (exists) {
+            console.log('File already in completed list, skipping duplicate:', fileId);
+            return prevCompleted;
+          }
+          
+          // 组装文件块
+          const chunks = Object.entries(file.receivedChunks)
+            .sort(([a], [b]) => parseInt(a) - parseInt(b))
+            .map(([_, chunk]) => chunk);
+          
+          // 创建Blob
+          const blob = new Blob(chunks, { type: file.contentType || 'application/octet-stream' });
+          
+          // 创建下载URL
+          const url = URL.createObjectURL(blob);
+          
+          // 添加到已完成文件列表
+          return [...prevCompleted, {
+            fileId,
+            fileName: file.fileName,
+            url,
+            size: file.fileSize,
+            sender: file.sender
+          }];
+        });
+        
+        // 从传输中文件移除
+        const newIncomingFiles = { ...prev };
+        delete newIncomingFiles[fileId];
+        return newIncomingFiles;
+      });
+    };
+
+    const handleReceiveFileChunk = (senderDeviceId, fileChunk) => {
+      const { fileId, chunkIndex, totalChunks, data } = fileChunk;
+      
+      // 如果数据是Base64字符串，转换回二进制格式
+      const binaryData = typeof data === 'string' ? 
+        new Uint8Array(base64ToArrayBuffer(data)) : 
+        data;
+      
+      setIncomingFiles(prev => {
+        // If we don't have this file initialized, ignore the chunk
+        if (!prev[fileId]) return prev;
+
+        // Store the chunk
+        const file = prev[fileId];
+        const newReceivedChunks = { ...file.receivedChunks, [chunkIndex]: binaryData };
+        const receivedChunksCount = Object.keys(newReceivedChunks).length;
+        const progress = Math.round((receivedChunksCount / totalChunks) * 100);
+        
+        // Calculate received size
+        let receivedSize = 0;
+        Object.values(newReceivedChunks).forEach(chunk => {
+          receivedSize += chunk.length;
+        });
+
+        return {
+          ...prev,
+          [fileId]: {
+            ...file,
+            receivedChunks: newReceivedChunks,
+            totalChunks,
+            receivedSize,
+            progress
+          }
+        };
+      });
+    };
+
+    const handleFileTransferComplete = (fileId) => {
+      // 直接检查 ref 中的值
+      if (processedFileIdsRef.current.has(fileId)) {
+        console.log('File already processed, skipping:', fileId);
+        return; // 如果已处理过，直接返回
+      }
+      
+      // 直接修改 ref 中的 Set
+      processedFileIdsRef.current.add(fileId);
+      console.log('Processing completed file:', fileId);
+      
+      // 现在处理文件
+      processCompletedFile(fileId);
+    };
+
+
+
     // Register event handlers for file transfer
     SignalRService.on('onReceiveFileMetadata', handleReceiveFileMetadata);
     SignalRService.on('onReceiveFileChunk', handleReceiveFileChunk);
@@ -50,13 +165,27 @@ const FileTransferPanel = ({ userId, deviceId }) => {
       SignalRService.on('onReceiveFileChunk', null);
       SignalRService.on('onFileTransferComplete', null);
     };
-  }, []);
+  }, []); // 依赖项为空数组，只在组件挂载时执行一次
 
   const handleFileChange = (e) => {
     if (e.target.files.length > 0) {
       setSelectedFile(e.target.files[0]);
     }
   };
+
+  function generateUUID() {
+    // 如果支持原生方法就使用它
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID();
+    }
+    
+    // 备选实现
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+      const r = (Math.random() * 16) | 0;
+      const v = c === 'x' ? r : ((r & 0x3) | 0x8);
+      return v.toString(16);
+    });
+  }
 
   const handleSendFile = async () => {
     if (!selectedFile) {
@@ -70,7 +199,8 @@ const FileTransferPanel = ({ userId, deviceId }) => {
 
     try {
       // Send file metadata
-      const fileId = crypto.randomUUID();
+      const fileId = generateUUID();
+
       const fileMetadata = {
         fileId,
         fileName: selectedFile.name,
@@ -118,119 +248,6 @@ const FileTransferPanel = ({ userId, deviceId }) => {
     } finally {
       setIsUploading(false);
     }
-  };
-
-  const handleReceiveFileMetadata = (message) => {
-    const { fileMetadata } = message;
-    
-    // Initialize data structures for the incoming file
-    setIncomingFiles(prev => ({
-      ...prev,
-      [fileMetadata.fileId]: {
-        ...fileMetadata,
-        receivedChunks: {},
-        totalChunks: 0,
-        receivedSize: 0,
-        progress: 0,
-        sender: message.senderDeviceId
-      }
-    }));
-  };
-
-  const handleReceiveFileChunk = (senderDeviceId, fileChunk) => {
-    const { fileId, chunkIndex, totalChunks, data } = fileChunk;
-    
-    // 如果数据是Base64字符串，转换回二进制格式
-    const binaryData = typeof data === 'string' ? 
-      new Uint8Array(base64ToArrayBuffer(data)) : 
-      data;
-    
-    setIncomingFiles(prev => {
-      // If we don't have this file initialized, ignore the chunk
-      if (!prev[fileId]) return prev;
-
-      // Store the chunk
-      const file = prev[fileId];
-      const newReceivedChunks = { ...file.receivedChunks, [chunkIndex]: binaryData };
-      const receivedChunksCount = Object.keys(newReceivedChunks).length;
-      const progress = Math.round((receivedChunksCount / totalChunks) * 100);
-      
-      // Calculate received size
-      let receivedSize = 0;
-      Object.values(newReceivedChunks).forEach(chunk => {
-        receivedSize += chunk.length;
-      });
-
-      return {
-        ...prev,
-        [fileId]: {
-          ...file,
-          receivedChunks: newReceivedChunks,
-          totalChunks,
-          receivedSize,
-          progress
-        }
-      };
-    });
-  };
-
-  const handleFileTransferComplete = (fileId) => {
-    // 检查文件是否已处理过，防止重复处理
-    if (processedFileIds.has(fileId)) {
-      console.log('File already processed, skipping:', fileId);
-      return;
-    }
-    
-    // 标记为已处理
-    processedFileIds.add(fileId);
-    console.log('Processing completed file:', fileId);
-    
-    setIncomingFiles(prev => {
-      if (!prev[fileId]) return prev;
-
-      const file = prev[fileId];
-      
-      // 检查该文件是否已经在已完成文件列表中
-      // 使用闭包传递文件信息以避免作用域问题
-      const processCompletedFile = (file) => {
-        setCompletedFiles(prevCompleted => {
-          // 检查文件是否已存在于完成列表中
-          const exists = prevCompleted.some(f => f.fileId === fileId);
-          if (exists) {
-            console.log('File already in completed list, skipping duplicate:', fileId);
-            return prevCompleted;
-          }
-          
-          // 组装文件块
-          const chunks = Object.entries(file.receivedChunks)
-            .sort(([a], [b]) => parseInt(a) - parseInt(b))
-            .map(([_, chunk]) => chunk);
-          
-          // 创建Blob
-          const blob = new Blob(chunks, { type: file.contentType || 'application/octet-stream' });
-          
-          // 创建下载URL
-          const url = URL.createObjectURL(blob);
-          
-          // 添加到已完成文件列表
-          return [...prevCompleted, {
-            fileId,
-            fileName: file.fileName,
-            url,
-            size: file.fileSize,
-            sender: file.sender
-          }];
-        });
-      };
-      
-      // 处理完成的文件
-      processCompletedFile(file);
-      
-      // 从传输中文件移除
-      const newIncomingFiles = { ...prev };
-      delete newIncomingFiles[fileId];
-      return newIncomingFiles;
-    });
   };
 
   const formatFileSize = (bytes) => {

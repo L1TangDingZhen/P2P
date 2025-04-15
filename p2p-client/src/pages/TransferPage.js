@@ -10,7 +10,8 @@ const TransferPage = ({ authInfo, onLogout }) => {
   const [connectionError, setConnectionError] = useState('');
   const [isConnected, setIsConnected] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState('connecting'); // 'connecting', 'connected', 'reconnecting', 'error'
-  const { userId, deviceId, invitationCode } = authInfo;
+  // const { userId, deviceId, invitationCode } = authInfo;
+  const { userId, deviceId } = authInfo;
 
   useEffect(() => {
     const connectToHub = async () => {
