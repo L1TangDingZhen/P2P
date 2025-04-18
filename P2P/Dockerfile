@@ -1,6 +1,6 @@
 FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS base
 WORKDIR /app
-EXPOSE 8080
+EXPOSE 5235
 
 FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
 WORKDIR /src
@@ -18,7 +18,7 @@ COPY --from=publish /app/publish .
 
 # 设置环境变量
 ENV ASPNETCORE_ENVIRONMENT=Production
-ENV ASPNETCORE_URLS=http://+:8080
-ENV ALLOWED_ORIGINS=http://localhost,http://thezbr.com
+ENV ASPNETCORE_URLS=http://+:5235
+ENV ALLOWED_ORIGINS=http://localhost,http://thezbr.com,http://54.253.174.18
 
 ENTRYPOINT ["dotnet", "P2P.dll"]

@@ -1,4 +1,5 @@
 import * as signalR from '@microsoft/signalr';
+import { getApiBaseUrl } from './ConfigService';
 
 class SignalRService {
   constructor() {
@@ -26,13 +27,7 @@ class SignalRService {
     console.log('Starting SignalR connection for user:', userId);
     
     try {
-      // 使用当前网页的主机名构建API URL
-      const currentHost = window.location.hostname;
-      // 如果是本地主机，使用localhost:5235，否则使用当前主机名配合5235端口
-      const apiUrl = currentHost === 'localhost' ? 
-        'http://localhost:5235' : 
-        `http://${currentHost}:5235`;
-        
+      const apiUrl = getApiBaseUrl();
       console.log(`Using SignalR hub URL: ${apiUrl}/p2phub`);
       
       // 使用长轮询作为备选方案

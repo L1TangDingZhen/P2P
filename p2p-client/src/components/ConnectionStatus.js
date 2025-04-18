@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Badge } from 'react-bootstrap';
+import { getApiBaseUrl } from '../services/ConfigService';
 
 const ConnectionStatus = ({ isConnected }) => {
   const [serverStatus, setServerStatus] = useState('unknown');
@@ -8,13 +9,7 @@ const ConnectionStatus = ({ isConnected }) => {
   // 检查服务器状态
   const checkServerStatus = async () => {
     try {
-      // 使用当前网页的主机名构建API URL
-      const currentHost = window.location.hostname;
-      // 如果是本地主机，使用localhost:5235，否则使用当前主机名配合5235端口
-      const apiUrl = currentHost === 'localhost' ? 
-        'http://localhost:5235' : 
-        `http://${currentHost}:5235`;
-        
+      const apiUrl = getApiBaseUrl();
       console.log(`Health check URL: ${apiUrl}/api/connectionstatus/health`);
       
       const response = await fetch(`${apiUrl}/api/connectionstatus/health`, {

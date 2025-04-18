@@ -1,3 +1,4 @@
+import { getApiBaseUrl } from './ConfigService';
 const USER_INFO_KEY = 'p2p_user_info';
 
 class AuthService {
@@ -25,13 +26,7 @@ class AuthService {
   async generateInvitationCode() {
     console.log('Generating invitation code...');
     try {
-      // 使用当前网页的主机名构建API URL
-      const currentHost = window.location.hostname;
-      // 如果是本地主机，使用localhost:5235，否则使用当前主机名配合5235端口
-      const apiUrl = currentHost === 'localhost' ? 
-        'http://localhost:5235' : 
-        `http://${currentHost}:5235`;
-      
+      const apiUrl = getApiBaseUrl();
       console.log(`Using API URL: ${apiUrl}`);
       
       const response = await fetch(`${apiUrl}/api/invitation/generate`, {
@@ -68,13 +63,7 @@ class AuthService {
     console.log('Authenticating with code:', normalizedCode);
     
     try {
-      // 使用当前网页的主机名构建API URL
-      const currentHost = window.location.hostname;
-      // 如果是本地主机，使用localhost:5235，否则使用当前主机名配合5235端口
-      const apiUrl = currentHost === 'localhost' ? 
-        'http://localhost:5235' : 
-        `http://${currentHost}:5235`;
-        
+      const apiUrl = getApiBaseUrl();
       console.log(`Using API URL: ${apiUrl}`);
       
       const response = await fetch(`${apiUrl}/api/invitation/authenticate`, {
