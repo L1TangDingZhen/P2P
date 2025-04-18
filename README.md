@@ -44,43 +44,70 @@ npm start
 
 前端将运行在 http://localhost:3000
 
-## Docker部署
+## Amazon Linux 部署说明
 
-项目提供了Docker支持，可以使用以下命令启动：
+### 准备工作
 
+1. 确保服务器已安装 Docker 和 Docker Compose
 ```bash
-# 在项目根目录下
+sudo yum update -y
+sudo yum install -y docker
+sudo service docker start
+sudo usermod -a -G docker ec2-user
+sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+sudo chmod +x /usr/local/bin/docker-compose
+```
+
+### 部署步骤
+
+1. 克隆仓库
+```bash
+git clone <仓库地址>
+cd P2P
+```
+
+2. 前端构建
+```bash
+# 进入前端目录
+cd p2p-client
+
+# 修改环境变量
+echo "REACT_APP_API_URL=http://你的域名" > .env.production
+
+# 构建前端
+docker build -t p2p-frontend-builder .
+docker run --rm -v $(pwd):/app -w /app p2p-frontend-builder npm run build
+
+# 回到项目根目录
+cd ..
+```
+
+3. 启动服务
+```bash
 docker-compose up -d
 ```
 
-Docker部署后的访问地址：
-- 前端：http://localhost:3000
-- 后端：http://localhost:5235
-
-## 网络访问配置
-
-如果需要从其他设备访问该应用（如通过热点共享），有以下两种方法：
-
-### 1. 本地开发模式
-
-修改`docker-compose.yml`中的`ALLOWED_ORIGINS`环境变量，添加允许访问的源地址：
-
-```yaml
-environment:
-  - ALLOWED_ORIGINS=http://localhost:3000,http://192.168.0.X:3000
+4. 检查服务状态
+```bash
+docker-compose ps
 ```
 
-其中`192.168.0.X`替换为你的本地IP地址。
+## 配置说明
 
-### 2. 生产部署
+### docker-compose.yml
+- 后端使用构建镜像方式部署
+- 前端使用静态文件挂载方式部署
+- Nginx 用于反向代理
 
-在生产环境中，建议使用反向代理（如Nginx）来处理CORS和安全问题。
+### 自定义域名
+1. 修改 nginx/nginx.conf 中的 server_name
+2. 更新前端和后端环境变量中的域名
+3. 修改 docker-compose.yml 中的 ALLOWED_ORIGINS 环境变量
 
-## 使用方法
-
-1. 在一个设备上生成邀请码
-2. 使用该邀请码在另一个设备上登录
-3. 在登录设备之间传输文本消息和文件
+### 故障排查
+- 检查日志: `docker-compose logs -f`
+- 检查网络: `docker network inspect p2p-network`
+- 检查容器: `docker-compose ps`
 
 ## 技术栈
 
