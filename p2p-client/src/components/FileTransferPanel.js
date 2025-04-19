@@ -324,9 +324,6 @@ const FileTransferPanel = ({ userId, deviceId }) => {
     <div>
       <div className="d-flex justify-content-between align-items-center mb-3">
         <h4>File Transfer</h4>
-        <Badge bg={transferType === 'p2p' ? 'primary' : 'secondary'}>
-          {transferType === 'p2p' ? 'P2P Mode' : 'Server Relay Mode'}
-        </Badge>
       </div>
       
       {error && (
@@ -358,9 +355,6 @@ const FileTransferPanel = ({ userId, deviceId }) => {
         <div className="mb-3">
           <p>
             Uploading: {selectedFile.name}
-            <Badge bg={transferType === 'p2p' ? 'primary' : 'secondary'} className="ms-2">
-              {transferType === 'p2p' ? 'P2P' : 'Server Relay'}
-            </Badge>
           </p>
           <ProgressBar now={uploadProgress} label={`${uploadProgress}%`} />
           <p className="small mt-1">
@@ -375,11 +369,8 @@ const FileTransferPanel = ({ userId, deviceId }) => {
           <h5>Incoming Files</h5>
           {Object.entries(incomingFiles).map(([fileId, file]) => (
             <div key={fileId} className="border rounded p-2 mb-2">
-              <div className="d-flex justify-content-between">
+              <div>
                 <p className="mb-1">Receiving: {file.fileName}</p>
-                <Badge bg={file.transferType === 'p2p' ? 'primary' : 'secondary'}>
-                  {file.transferType === 'p2p' ? 'P2P' : 'Server Relay'}
-                </Badge>
               </div>
               <ProgressBar now={file.progress} label={`${file.progress}%`} />
               <p className="small mt-1">
@@ -396,11 +387,8 @@ const FileTransferPanel = ({ userId, deviceId }) => {
           <h5>Completed Transfers</h5>
           {completedFiles.map((file) => (
             <div key={file.fileId} className="border rounded p-2 mb-2">
-              <div className="d-flex justify-content-between align-items-center mb-2">
+              <div className="mb-2">
                 <p className="mb-0">{file.fileName} ({formatFileSize(file.size)})</p>
-                <Badge bg={file.transferType === 'p2p' ? 'primary' : 'secondary'}>
-                  {file.transferType === 'p2p' ? 'P2P' : 'Server Relay'}
-                </Badge>
               </div>
               <a 
                 href={file.url} 

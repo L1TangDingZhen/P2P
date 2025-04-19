@@ -152,9 +152,6 @@ const MessagePanel = ({ userId, deviceId }) => {
     <div className="mb-4">
       <div className="d-flex justify-content-between align-items-center mb-3">
         <h4>Messages</h4>
-        <Badge bg={transferMode === 'p2p' ? 'primary' : 'secondary'}>
-          {transferMode === 'p2p' ? 'P2P Mode' : 'Server Relay Mode'}
-        </Badge>
       </div>
       
       <div 
@@ -177,12 +174,7 @@ const MessagePanel = ({ userId, deviceId }) => {
             >
               <div>{msg.content}</div>
               <div className="d-flex justify-content-end align-items-center small mt-1">
-                <span className="me-2">{formatTimestamp(msg.timestamp)}</span>
-                {msg.transferType && (
-                  <Badge bg={msg.transferType === 'p2p' ? 'primary' : 'secondary'} pill size="sm">
-                    {msg.transferType === 'p2p' ? 'P2P' : 'Server'}
-                  </Badge>
-                )}
+                <span>{formatTimestamp(msg.timestamp)}</span>
               </div>
             </div>
           ))

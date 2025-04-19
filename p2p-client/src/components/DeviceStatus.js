@@ -144,6 +144,7 @@ const DeviceStatus = ({ authInfo }) => {
     };
   }, [deviceId, handleDeviceStatusChanged, handleOnlineDevices]);
 
+  // eslint-disable-next-line no-unused-vars
   const formatDeviceName = (id) => {
     if (id === deviceId) {
       return 'This device';
