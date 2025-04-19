@@ -11,7 +11,12 @@ module.exports = function(app) {
     createProxyMiddleware({
       target: apiUrl,
       changeOrigin: true,
-      secure: false
+      secure: false,
+      // 添加CORS请求头
+      onProxyReq: (proxyReq) => {
+        proxyReq.setHeader('Origin', apiUrl);
+        proxyReq.setHeader('X-Requested-With', 'XMLHttpRequest');
+      }
     })
   );
 
@@ -21,7 +26,12 @@ module.exports = function(app) {
       target: apiUrl,
       changeOrigin: true,
       secure: false,
-      ws: true // 支持WebSocket
+      ws: true, // 支持WebSocket
+      // 添加CORS请求头
+      onProxyReq: (proxyReq) => {
+        proxyReq.setHeader('Origin', apiUrl);
+        proxyReq.setHeader('X-Requested-With', 'XMLHttpRequest');
+      }
     })
   );
 };

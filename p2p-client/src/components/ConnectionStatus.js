@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Badge } from 'react-bootstrap';
+import { Badge, OverlayTrigger, Tooltip } from 'react-bootstrap';
 import { getApiBaseUrl } from '../services/ConfigService';
 
-const ConnectionStatus = ({ isConnected }) => {
+const ConnectionStatus = ({ isConnected, transferMode = 'server' }) => {
   const [serverStatus, setServerStatus] = useState('unknown');
   const [lastChecked, setLastChecked] = useState(null);
 
@@ -14,7 +14,11 @@ const ConnectionStatus = ({ isConnected }) => {
       
       const response = await fetch(`${apiUrl}/api/connectionstatus/health`, {
         credentials: 'include',
-        mode: 'cors'
+        mode: 'cors',
+        headers: {
+          'Accept': 'application/json',
+          'X-Requested-With': 'XMLHttpRequest'
+        }
       });
       if (response.ok) {
         await response.json(); // 消费响应体但不保存变量
@@ -46,8 +50,37 @@ const ConnectionStatus = ({ isConnected }) => {
     return () => clearInterval(interval);
   }, []);
 
+  // 根据传输模式设置显示
+  const renderTransferModeBadge = () => {
+    if (transferMode === 'p2p') {
+      return (
+        <OverlayTrigger
+          placement="top"
+          overlay={<Tooltip>Direct P2P connection established. Data transfers directly between devices.</Tooltip>}
+        >
+          <Badge bg="primary" style={{ cursor: 'help' }}>
+            <i className="bi bi-arrow-left-right me-1"></i>
+            P2P Direct
+          </Badge>
+        </OverlayTrigger>
+      );
+    } else {
+      return (
+        <OverlayTrigger
+          placement="top"
+          overlay={<Tooltip>Server relay mode. Data passes through the server between devices.</Tooltip>}
+        >
+          <Badge bg="secondary" style={{ cursor: 'help' }}>
+            <i className="bi bi-server me-1"></i>
+            Server Relay
+          </Badge>
+        </OverlayTrigger>
+      );
+    }
+  };
+
   return (
-    <div className="mt-2 mb-3 d-flex align-items-center">
+    <div className="mt-2 mb-3 d-flex align-items-center flex-wrap">
       <div>
         <span>Server: </span>
         {serverStatus === 'online' ? (
@@ -66,6 +99,11 @@ const ConnectionStatus = ({ isConnected }) => {
         ) : (
           <Badge bg="warning">Disconnected</Badge>
         )}
+      </div>
+      
+      <div className="ms-3">
+        <span>Transfer Mode: </span>
+        {renderTransferModeBadge()}
       </div>
       
       {lastChecked && (

@@ -126,3 +126,30 @@ docker-compose ps
 5. 对于跨域(CORS)错误，确保已在后端配置允许访问的源地址
 
 详细的故障排除指南请参考`debug.md`文件。
+
+
+
+
+
+  1. 首先生成了一个邀请码：
+    - "Generated new invitation code: GRO4UL2G for user: 6fdb03f6-df62-43ae-8887-54f8a66811f6"
+    - 这表示系统为用户ID 6fdb...创建了邀请码GRO4UL2G
+  2. 然后有设备用这个邀请码进行认证：
+    - "Authentication attempt with code: GRO4UL2G"
+    - "Authentication successful for user: 6fdb..., new device: e25d7..."
+    - 表示一个设备使用邀请码成功连接，系统为其分配了设备ID e25d...
+  3. 设备连接到SignalR Hub：
+    - "Device e25d... is now connected with connection ID HblPbkwv7QwhBtqbP7FM7w"
+    - 表示设备通过SignalR连接成功，获得连接ID
+  4. 系统广播设备在线状态：
+    - "Notifying all devices... that device e25d... is now online"
+    - "Sending 1 online devices to user 6fdb..."
+    - 告知用户群组中的设备有新设备上线
+  5. 设备请求获取在线设备列表：
+    - "GetOnlineDevices requested by connection..."
+    - 表示设备主动请求获取当前在线设备列表
+  6. 后面可以看到设备重新连接（可能是刷新页面）：
+    - "Device e25d... is now connected with connection ID fvbfHEMu..."
+    - 相同设备ID但连接ID变化，表示重新建立了连接
+
+  这显示了用户账户创建、设备认证和在线状态通知的完整流程。

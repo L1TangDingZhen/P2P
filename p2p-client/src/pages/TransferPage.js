@@ -5,12 +5,13 @@ import MessagePanel from '../components/MessagePanel';
 import FileTransferPanel from '../components/FileTransferPanel';
 import ConnectionStatus from '../components/ConnectionStatus';
 import SignalRService from '../services/SignalRService';
+import WebRTCService from '../services/WebRTCService';
 
 const TransferPage = ({ authInfo, onLogout }) => {
   const [connectionError, setConnectionError] = useState('');
   const [isConnected, setIsConnected] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState('connecting'); // 'connecting', 'connected', 'reconnecting', 'error'
-  // const { userId, deviceId, invitationCode } = authInfo;
+  const [transferMode, setTransferMode] = useState('server'); // 'server' or 'p2p'
   const { userId, deviceId } = authInfo;
 
   useEffect(() => {
@@ -19,7 +20,7 @@ const TransferPage = ({ authInfo, onLogout }) => {
         setConnectionStatus('connecting');
         console.log('Attempting to connect to SignalR hub with userId:', userId, 'deviceId:', deviceId);
         
-        // 添加连接事件处理
+        // Add connection event handlers
         SignalRService.on('onConnectionEstablished', () => {
           setConnectionStatus('connected');
           setIsConnected(true);
@@ -36,10 +37,46 @@ const TransferPage = ({ authInfo, onLogout }) => {
           setIsConnected(false);
         });
         
+        // Set event handlers before starting connection
+        // Add callback for online devices
+        SignalRService.on('OnlineDevices', (devices) => {
+          console.log('TransferPage: online devices received:', devices);
+        });
+        
+        SignalRService.on('DeviceStatusChanged', (deviceId, isOnline) => {
+          console.log('TransferPage: device status changed:', deviceId, isOnline);
+        });
+        
         await SignalRService.startConnection(userId, deviceId);
         console.log('SignalR connection established successfully');
         setConnectionStatus('connected');
         setIsConnected(true);
+        
+        // Initialize WebRTC service
+        try {
+          await WebRTCService.initialize(userId, deviceId);
+          
+          // Listen for transfer mode changes
+          WebRTCService.on('onTransferModeChanged', (mode) => {
+            console.log(`Transfer mode changed to: ${mode}`);
+            setTransferMode(mode);
+          });
+          
+          WebRTCService.on('onConnectionStateChanged', (peerId, state) => {
+            console.log(`WebRTC connection to ${peerId} changed to ${state}`);
+          });
+          
+          console.log('WebRTC service initialized successfully');
+          
+          // Manually check for online devices after 1 second, in case we missed initial events
+          setTimeout(() => {
+            const status = WebRTCService.getConnectionStatus();
+            console.log('Current WebRTC connection status:', status);
+          }, 1000);
+        } catch (webrtcError) {
+          console.error('Failed to initialize WebRTC:', webrtcError);
+          // Even if WebRTC fails, we can still use server relay
+        }
       } catch (error) {
         console.error('Failed to connect to SignalR hub:', error);
         setConnectionStatus('error');
@@ -50,14 +87,32 @@ const TransferPage = ({ authInfo, onLogout }) => {
     connectToHub();
 
     return () => {
+      // Clean up connections
+      WebRTCService.closeAllConnections();
       SignalRService.stopConnection();
     };
   }, [userId, deviceId]);
 
   const handleDisconnect = () => {
+    WebRTCService.closeAllConnections();
     SignalRService.stopConnection();
     onLogout();
   };
+
+  // 检查连接状态
+  useEffect(() => {
+    if (isConnected) {
+      // 每10秒更新一次传输模式
+      const interval = setInterval(() => {
+        const status = WebRTCService.getConnectionStatus();
+        if (status.transferMode !== transferMode) {
+          setTransferMode(status.transferMode);
+        }
+      }, 10000);
+      
+      return () => clearInterval(interval);
+    }
+  }, [isConnected, transferMode]);
 
   if (connectionError) {
     return (
@@ -129,9 +184,18 @@ const TransferPage = ({ authInfo, onLogout }) => {
           <Button 
             variant="outline-primary" 
             size="sm"
-            onClick={() => {
+            className="copy-button"
+            onClick={(e) => {
               navigator.clipboard.writeText(authInfo.invitationCode);
-              alert('Invitation code copied to clipboard!');
+              
+              // 添加点击动画效果
+              const button = e.currentTarget;
+              button.classList.add('clicked');
+              
+              // 300ms后移除动画类
+              setTimeout(() => {
+                button.classList.remove('clicked');
+              }, 300);
             }}
           >
             Copy Code
@@ -139,7 +203,7 @@ const TransferPage = ({ authInfo, onLogout }) => {
         </Alert>
       )}
       
-      <ConnectionStatus isConnected={isConnected} />
+      <ConnectionStatus isConnected={isConnected} transferMode={transferMode} />
 
       <Row>
         <Col md={4}>

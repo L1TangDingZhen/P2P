@@ -7,6 +7,18 @@ class SignalRService {
     this.connectionPromise = null;
     this.reconnectAttempts = 0;
     this.eventHandlers = {
+      // Hub-side event names
+      ReceiveMessage: null,
+      ReceiveFileMetadata: null,
+      ReceiveFileChunk: null,
+      FileTransferComplete: null,
+      DeviceStatusChanged: null,
+      OnlineDevices: null,
+      Error: null,
+      ReceiveWebRTCSignal: null,
+      IceServers: null,
+      
+      // Client-side event names
       onReceiveMessage: null,
       onReceiveFileMetadata: null,
       onReceiveFileChunk: null,
@@ -15,7 +27,9 @@ class SignalRService {
       onOnlineDevices: null,
       onError: null,
       onConnectionClosed: null,
-      onConnectionEstablished: null
+      onConnectionEstablished: null,
+      onReceiveWebRTCSignal: null,
+      onIceServers: null
     };
   }
 
@@ -30,12 +44,17 @@ class SignalRService {
       const apiUrl = getApiBaseUrl();
       console.log(`Using SignalR hub URL: ${apiUrl}/p2phub`);
       
-      // 使用长轮询作为备选方案
+      // Use long polling as fallback
+      // 修改SignalR连接配置以解决CORS问题
       this.connection = new signalR.HubConnectionBuilder()
         .withUrl(`${apiUrl}/p2phub`, {
           skipNegotiation: false,
-          // 启用所有传输类型，优先WebSockets，备选长轮询
-          transport: signalR.HttpTransportType.WebSockets | signalR.HttpTransportType.LongPolling
+          // 使用WebSockets作为首选，仅在必要时回退到LongPolling
+          transport: signalR.HttpTransportType.WebSockets | signalR.HttpTransportType.LongPolling,
+          // 添加额外的CORS相关配置
+          headers: { "X-Requested-With": "XMLHttpRequest" },
+          // 浏览器支持
+          withCredentials: true
         })
         .withAutomaticReconnect()
         .configureLogging(signalR.LogLevel.Information)
@@ -55,7 +74,7 @@ class SignalRService {
         this.connection.onclose(error => {
           console.log('SignalR connection closed', error);
           this.connectionPromise = null;
-          // 当连接关闭时，触发事件
+          // Trigger event when connection closes
           if (this.eventHandlers.onConnectionClosed) {
             this.eventHandlers.onConnectionClosed(error);
           }
@@ -65,7 +84,7 @@ class SignalRService {
       .catch(err => {
         console.error('SignalR connection error:', err);
         this.connectionPromise = null;
-        // 尝试最多重连3次
+        // Try to reconnect up to 3 times
         if (this.reconnectAttempts < 3) {
           this.reconnectAttempts++;
           console.log(`Reconnection attempt ${this.reconnectAttempts}/3...`);
@@ -82,47 +101,60 @@ class SignalRService {
   }
 
   setupEventHandlers() {
-    this.connection.on('ReceiveMessage', message => {
-      if (this.eventHandlers.onReceiveMessage) {
-        this.eventHandlers.onReceiveMessage(message);
+    // Helper function to trigger both hub-side and client-side event handlers
+    const triggerEvent = (hubEvent, clientEvent, ...args) => {
+      console.log(`SignalR event received: ${hubEvent}`, ...args);
+      
+      // Call hub-side handler if exists
+      if (this.eventHandlers[hubEvent]) {
+        this.eventHandlers[hubEvent](...args);
       }
+      
+      // Call client-side handler if exists
+      if (this.eventHandlers[clientEvent]) {
+        this.eventHandlers[clientEvent](...args);
+      }
+    };
+    
+    this.connection.on('ReceiveMessage', message => {
+      triggerEvent('ReceiveMessage', 'onReceiveMessage', message);
     });
 
     this.connection.on('ReceiveFileMetadata', message => {
-      if (this.eventHandlers.onReceiveFileMetadata) {
-        this.eventHandlers.onReceiveFileMetadata(message);
-      }
+      triggerEvent('ReceiveFileMetadata', 'onReceiveFileMetadata', message);
     });
 
     this.connection.on('ReceiveFileChunk', (senderDeviceId, fileChunk) => {
-      if (this.eventHandlers.onReceiveFileChunk) {
-        this.eventHandlers.onReceiveFileChunk(senderDeviceId, fileChunk);
-      }
+      triggerEvent('ReceiveFileChunk', 'onReceiveFileChunk', senderDeviceId, fileChunk);
     });
 
     this.connection.on('FileTransferComplete', fileId => {
-      if (this.eventHandlers.onFileTransferComplete) {
-        this.eventHandlers.onFileTransferComplete(fileId);
-      }
+      triggerEvent('FileTransferComplete', 'onFileTransferComplete', fileId);
     });
 
     this.connection.on('DeviceStatusChanged', (deviceId, isOnline) => {
-      if (this.eventHandlers.onDeviceStatusChanged) {
-        this.eventHandlers.onDeviceStatusChanged(deviceId, isOnline);
-      }
+      console.log('Device status changed event received:', deviceId, isOnline);
+      triggerEvent('DeviceStatusChanged', 'onDeviceStatusChanged', deviceId, isOnline);
     });
 
     this.connection.on('OnlineDevices', devices => {
-      if (this.eventHandlers.onOnlineDevices) {
-        this.eventHandlers.onOnlineDevices(devices);
-      }
+      console.log('Online devices event received:', devices);
+      triggerEvent('OnlineDevices', 'onOnlineDevices', devices);
+    });
+
+    // WebRTC signaling events
+    this.connection.on('ReceiveWebRTCSignal', signal => {
+      triggerEvent('ReceiveWebRTCSignal', 'onReceiveWebRTCSignal', signal);
+    });
+
+    // ICE servers configuration events
+    this.connection.on('IceServers', iceServers => {
+      triggerEvent('IceServers', 'onIceServers', iceServers);
     });
 
     this.connection.on('Error', message => {
       console.error('Hub error:', message);
-      if (this.eventHandlers.onError) {
-        this.eventHandlers.onError(message);
-      }
+      triggerEvent('Error', 'onError', message);
     });
   }
 
@@ -131,6 +163,9 @@ class SignalRService {
     try {
       await this.connection.invoke('RegisterConnection', userId, deviceId);
       console.log('Connection registered successfully');
+      
+      // Don't try to explicitly request online devices - 
+      // the server will broadcast them as part of RegisterConnection
     } catch (error) {
       console.error('Error registering connection:', error);
       throw error;
@@ -159,7 +194,22 @@ class SignalRService {
   }
 
   on(eventName, callback) {
-    if (this.eventHandlers.hasOwnProperty(eventName)) {
+    // Map component-specific event names to internal event names
+    const mappedEventName = eventName === 'onReceiveMessage' ? 'ReceiveMessage' :
+                           eventName === 'onReceiveFileMetadata' ? 'ReceiveFileMetadata' :
+                           eventName === 'onReceiveFileChunk' ? 'ReceiveFileChunk' :
+                           eventName === 'onFileTransferComplete' ? 'FileTransferComplete' :
+                           eventName === 'onDeviceStatusChanged' ? 'DeviceStatusChanged' :
+                           eventName === 'onOnlineDevices' ? 'OnlineDevices' :
+                           eventName === 'onError' ? 'Error' :
+                           eventName === 'onReceiveWebRTCSignal' ? 'ReceiveWebRTCSignal' :
+                           eventName === 'onIceServers' ? 'IceServers' :
+                           eventName;
+    
+    // Check both original and mapped event names
+    if (this.eventHandlers.hasOwnProperty(mappedEventName)) {
+      this.eventHandlers[mappedEventName] = callback;
+    } else if (this.eventHandlers.hasOwnProperty(eventName)) {
       this.eventHandlers[eventName] = callback;
     } else {
       console.warn(`Unknown event name: ${eventName}`);
@@ -175,6 +225,6 @@ class SignalRService {
   }
 }
 
-// 创建实例并导出，避免匿名默认导出
+// Create instance and export, avoiding anonymous default export
 const signalRService = new SignalRService();
 export default signalRService;

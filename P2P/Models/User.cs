@@ -7,6 +7,7 @@ namespace P2P.Models
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
         public List<ConnectedDevice> ConnectedDevices { get; set; } = new List<ConnectedDevice>();
         public bool CanAddDevice => ConnectedDevices.Count < 2;
+        public bool HasConnections => ConnectedDevices.Count > 0;
 
         // 清理已断开连接的设备
         public void CleanDisconnectedDevices()

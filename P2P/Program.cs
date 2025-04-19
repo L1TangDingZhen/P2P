@@ -1,5 +1,6 @@
 using P2P.Hubs;
 using P2P.Services;
+using P2P.Models;
 
 namespace P2P
 {
@@ -17,13 +18,18 @@ namespace P2P
             // Add services to the container.
             builder.Services.AddSingleton<UserService>();
             
-            // 使用更灵活的CORS配置，适应不同环境下的访问
+            // 添加邀请码过期后台服务
+            builder.Services.AddHostedService<InvitationExpirationService>();
+            
+            // 增强的CORS配置，解决SignalR跨域问题
             builder.Services.AddCors(options => {
                 options.AddPolicy("CorsPolicy", policy => 
-                    policy.SetIsOriginAllowed(_ => true)
+                    policy.SetIsOriginAllowed(_ => true) // 允许任何来源
                           .AllowAnyMethod()
                           .AllowAnyHeader()
-                          .AllowCredentials());
+                          .AllowCredentials() // 允许凭据
+                          .WithExposedHeaders("X-Requested-With") // 暴露必要的头信息
+                          .SetPreflightMaxAge(TimeSpan.FromSeconds(3600))); // 缓存预检请求结果1小时
             });
             
             // Add SignalR for real-time communication
@@ -60,8 +66,8 @@ namespace P2P
 
             app.MapControllers();
             
-            // 映射SignalR集线器
-            app.MapHub<P2PHub>("/p2phub");
+            // 映射SignalR集线器并应用CORS策略
+            app.MapHub<P2PHub>("/p2phub").RequireCors("CorsPolicy");
 
             // 打印启动确认
             Console.WriteLine("\n============================");

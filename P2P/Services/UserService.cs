@@ -12,6 +12,9 @@ namespace P2P.Services
         
         // 最近生成的邀请码，用于调试
         private string _lastGeneratedCode = string.Empty;
+        
+        // 锁对象，用于线程安全操作
+        private readonly object _lock = new();
 
         public List<User> GetAllUsers()
         {
@@ -131,6 +134,20 @@ namespace P2P.Services
         {
             return _users.TryGetValue(userId, out var user) ? user.ConnectedDevices : new List<ConnectedDevice>();
         }
+        
+        public List<string> GetDeviceConnectionIds(string userId)
+        {
+            if (!_users.TryGetValue(userId, out var user))
+            {
+                return new List<string>();
+            }
+            
+            // Return connection IDs for all online devices
+            return user.ConnectedDevices
+                .Where(d => d.IsOnline && !string.IsNullOrEmpty(d.ConnectionId))
+                .Select(d => d.ConnectionId)
+                .ToList();
+        }
 
         public bool UpdateDeviceConnectionId(string userId, string deviceId, string connectionId)
         {
@@ -164,6 +181,38 @@ namespace P2P.Services
             } while (_invitationCodes.ContainsKey(code));
 
             return code;
+        }
+        
+        /// <summary>
+        /// 使未使用的邀请码过期
+        /// </summary>
+        /// <param name="userId">用户ID</param>
+        /// <returns>是否成功过期该邀请码</returns>
+        public bool ExpireInvitationCode(string userId)
+        {
+            lock (_lock)
+            {
+                if (!_users.TryGetValue(userId, out var user))
+                {
+                    return false;
+                }
+                
+                // 只有当没有设备连接时才过期
+                if (user.ConnectedDevices.Count > 0)
+                {
+                    return false;
+                }
+                
+                // 移除邀请码映射
+                _invitationCodes.Remove(user.InvitationCode);
+                
+                // 移除用户
+                _users.Remove(userId);
+                
+                Console.WriteLine($"Invitation code {user.InvitationCode} for user {userId} has expired after 2 minutes with no connections");
+                
+                return true;
+            }
         }
     }
 }

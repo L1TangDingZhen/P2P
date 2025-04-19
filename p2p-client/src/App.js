@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import 'bootstrap/dist/css/bootstrap.min.css';
-
+import './App.css'; // 导入自定义CSS
 import LoginPage from './pages/LoginPage';
 import TransferPage from './pages/TransferPage';
 import AuthService from './services/AuthService';

@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Form, Button, ProgressBar, Alert } from 'react-bootstrap';
+import { Form, Button, ProgressBar, Alert, Badge } from 'react-bootstrap';
 import SignalRService from '../services/SignalRService';
+import WebRTCService from '../services/WebRTCService';
 
-// 辅助函数：将ArrayBuffer转换为Base64字符串
+// Helper function: Convert ArrayBuffer to Base64 string
 function arrayBufferToBase64(buffer) {
   let binary = '';
   const bytes = new Uint8Array(buffer);
@@ -13,7 +14,7 @@ function arrayBufferToBase64(buffer) {
   return window.btoa(binary);
 }
 
-// 辅助函数：将Base64字符串转换回ArrayBuffer
+// Helper function: Convert Base64 string back to ArrayBuffer
 function base64ToArrayBuffer(base64) {
   const binaryString = window.atob(base64);
   const len = binaryString.length;
@@ -29,6 +30,7 @@ const FileTransferPanel = ({ userId, deviceId }) => {
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [error, setError] = useState('');
+  const [transferType, setTransferType] = useState('server'); // 'server' or 'p2p'
   
   // For incoming transfers
   const [incomingFiles, setIncomingFiles] = useState({});
@@ -39,7 +41,32 @@ const FileTransferPanel = ({ userId, deviceId }) => {
   const CHUNK_SIZE = 50 * 1024; // 50 KB chunks
 
   useEffect(() => {
-    // 在 useEffect 内部定义事件处理函数，避免依赖项问题
+    // Get current WebRTC connection status and update transfer type
+    const updateTransferType = () => {
+      try {
+        const connectionStatus = WebRTCService.getConnectionStatus();
+        if (connectionStatus.transferMode !== transferType) {
+          setTransferType(connectionStatus.transferMode);
+          console.log(`Transfer type updated to: ${connectionStatus.transferMode}`);
+        }
+      } catch (error) {
+        console.error('Error getting WebRTC status:', error);
+      }
+    };
+
+    // Listen for WebRTC transfer mode changes
+    WebRTCService.on('onTransferModeChanged', (mode) => {
+      setTransferType(mode);
+      console.log(`Transfer type changed to: ${mode}`);
+    });
+
+    // Initial transfer type retrieval
+    updateTransferType();
+    
+    // Periodically update transfer type
+    const interval = setInterval(updateTransferType, 5000);
+    
+    // Define event handlers inside useEffect to avoid dependency issues
     const handleReceiveFileMetadata = (message) => {
       const { fileMetadata } = message;
       
@@ -52,7 +79,8 @@ const FileTransferPanel = ({ userId, deviceId }) => {
           totalChunks: 0,
           receivedSize: 0,
           progress: 0,
-          sender: message.senderDeviceId
+          sender: message.senderDeviceId,
+          transferType: 'server' // Mark as server relay transfer
         }
       }));
     };
@@ -63,37 +91,38 @@ const FileTransferPanel = ({ userId, deviceId }) => {
     
         const file = prev[fileId];
         
-        // 组装文件块并创建下载URL
+        // Assemble file chunks and create download URL
         setCompletedFiles(prevCompleted => {
-          // 检查文件是否已存在于完成列表中
+          // Check if file already exists in completed list
           const exists = prevCompleted.some(f => f.fileId === fileId);
           if (exists) {
             console.log('File already in completed list, skipping duplicate:', fileId);
             return prevCompleted;
           }
           
-          // 组装文件块
+          // Assemble file chunks
           const chunks = Object.entries(file.receivedChunks)
             .sort(([a], [b]) => parseInt(a) - parseInt(b))
             .map(([_, chunk]) => chunk);
           
-          // 创建Blob
+          // Create Blob
           const blob = new Blob(chunks, { type: file.contentType || 'application/octet-stream' });
           
-          // 创建下载URL
+          // Create download URL
           const url = URL.createObjectURL(blob);
           
-          // 添加到已完成文件列表
+          // Add to completed files list
           return [...prevCompleted, {
             fileId,
             fileName: file.fileName,
             url,
             size: file.fileSize,
-            sender: file.sender
+            sender: file.sender,
+            transferType: file.transferType || 'server' // Transfer type
           }];
         });
         
-        // 从传输中文件移除
+        // Remove from incoming files
         const newIncomingFiles = { ...prev };
         delete newIncomingFiles[fileId];
         return newIncomingFiles;
@@ -103,7 +132,7 @@ const FileTransferPanel = ({ userId, deviceId }) => {
     const handleReceiveFileChunk = (senderDeviceId, fileChunk) => {
       const { fileId, chunkIndex, totalChunks, data } = fileChunk;
       
-      // 如果数据是Base64字符串，转换回二进制格式
+      // If data is Base64 string, convert back to binary format
       const binaryData = typeof data === 'string' ? 
         new Uint8Array(base64ToArrayBuffer(data)) : 
         data;
@@ -138,21 +167,36 @@ const FileTransferPanel = ({ userId, deviceId }) => {
     };
 
     const handleFileTransferComplete = (fileId) => {
-      // 直接检查 ref 中的值
+      // Check value directly in ref
       if (processedFileIdsRef.current.has(fileId)) {
         console.log('File already processed, skipping:', fileId);
-        return; // 如果已处理过，直接返回
+        return; // If already processed, return directly
       }
       
-      // 直接修改 ref 中的 Set
+      // Directly modify the Set in ref
       processedFileIdsRef.current.add(fileId);
       console.log('Processing completed file:', fileId);
       
-      // 现在处理文件
+      // Now process the file
       processCompletedFile(fileId);
     };
 
+    // WebRTC P2P file reception handling
+    WebRTCService.on('onFileReceived', (fileInfo) => {
+      console.log('WebRTC P2P file received:', fileInfo);
+      setCompletedFiles(prev => [
+        ...prev, 
+        {
+          ...fileInfo,
+          transferType: 'p2p' // Mark as P2P direct transfer
+        }
+      ]);
+    });
 
+    WebRTCService.on('onFileTransferProgress', (fileId, progress) => {
+      console.log(`WebRTC file transfer progress: ${fileId} - ${progress}%`);
+      // Could update P2P transfer progress here, but simplified version doesn't implement this
+    });
 
     // Register event handlers for file transfer
     SignalRService.on('onReceiveFileMetadata', handleReceiveFileMetadata);
@@ -164,8 +208,13 @@ const FileTransferPanel = ({ userId, deviceId }) => {
       SignalRService.on('onReceiveFileMetadata', null);
       SignalRService.on('onReceiveFileChunk', null);
       SignalRService.on('onFileTransferComplete', null);
+      WebRTCService.on('onFileReceived', null);
+      WebRTCService.on('onFileTransferProgress', null);
+      WebRTCService.on('onTransferModeChanged', null);
+      
+      clearInterval(interval);
     };
-  }, []); // 依赖项为空数组，只在组件挂载时执行一次
+  }, [transferType]); // Add transferType as dependency
 
   const handleFileChange = (e) => {
     if (e.target.files.length > 0) {
@@ -174,12 +223,12 @@ const FileTransferPanel = ({ userId, deviceId }) => {
   };
 
   function generateUUID() {
-    // 如果支持原生方法就使用它
+    // Use native method if available
     if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
       return crypto.randomUUID();
     }
     
-    // 备选实现
+    // Fallback implementation
     return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
       const r = (Math.random() * 16) | 0;
       const v = c === 'x' ? r : ((r & 0x3) | 0x8);
@@ -198,6 +247,21 @@ const FileTransferPanel = ({ userId, deviceId }) => {
     setUploadProgress(0);
 
     try {
+      // Try to use WebRTC P2P transfer
+      if (transferType === 'p2p') {
+        try {
+          console.log('Trying to send file via WebRTC P2P');
+          // This part should actually implement WebRTC file sending
+          // For now, for demonstration, we just log and use server relay
+          console.log('WebRTC P2P file transfer not fully implemented, falling back to server relay');
+        } catch (p2pError) {
+          console.error('WebRTC file transfer failed, falling back to server relay:', p2pError);
+        }
+      }
+      
+      // If P2P not available or not fully implemented, use server relay
+      console.log('Using server relay for file transfer');
+      
       // Send file metadata
       const fileId = generateUUID();
 
@@ -221,7 +285,7 @@ const FileTransferPanel = ({ userId, deviceId }) => {
         // Convert the chunk to an array buffer
         const arrayBuffer = await chunk.arrayBuffer();
         
-        // 将ArrayBuffer转换为Base64字符串，以避免二进制传输问题
+        // Convert ArrayBuffer to Base64 string to avoid binary transmission issues
         const base64Data = arrayBufferToBase64(arrayBuffer);
         
         // Send the chunk
@@ -258,7 +322,12 @@ const FileTransferPanel = ({ userId, deviceId }) => {
 
   return (
     <div>
-      <h4>File Transfer</h4>
+      <div className="d-flex justify-content-between align-items-center mb-3">
+        <h4>File Transfer</h4>
+        <Badge bg={transferType === 'p2p' ? 'primary' : 'secondary'}>
+          {transferType === 'p2p' ? 'P2P Mode' : 'Server Relay Mode'}
+        </Badge>
+      </div>
       
       {error && (
         <Alert variant="danger" onClose={() => setError('')} dismissible>
@@ -287,7 +356,12 @@ const FileTransferPanel = ({ userId, deviceId }) => {
       
       {isUploading && (
         <div className="mb-3">
-          <p>Uploading: {selectedFile.name}</p>
+          <p>
+            Uploading: {selectedFile.name}
+            <Badge bg={transferType === 'p2p' ? 'primary' : 'secondary'} className="ms-2">
+              {transferType === 'p2p' ? 'P2P' : 'Server Relay'}
+            </Badge>
+          </p>
           <ProgressBar now={uploadProgress} label={`${uploadProgress}%`} />
           <p className="small mt-1">
             {formatFileSize(Math.floor(selectedFile.size * uploadProgress / 100))} of {formatFileSize(selectedFile.size)}
@@ -301,7 +375,12 @@ const FileTransferPanel = ({ userId, deviceId }) => {
           <h5>Incoming Files</h5>
           {Object.entries(incomingFiles).map(([fileId, file]) => (
             <div key={fileId} className="border rounded p-2 mb-2">
-              <p className="mb-1">Receiving: {file.fileName}</p>
+              <div className="d-flex justify-content-between">
+                <p className="mb-1">Receiving: {file.fileName}</p>
+                <Badge bg={file.transferType === 'p2p' ? 'primary' : 'secondary'}>
+                  {file.transferType === 'p2p' ? 'P2P' : 'Server Relay'}
+                </Badge>
+              </div>
               <ProgressBar now={file.progress} label={`${file.progress}%`} />
               <p className="small mt-1">
                 {formatFileSize(file.receivedSize)} of {formatFileSize(file.fileSize)}
@@ -317,7 +396,12 @@ const FileTransferPanel = ({ userId, deviceId }) => {
           <h5>Completed Transfers</h5>
           {completedFiles.map((file) => (
             <div key={file.fileId} className="border rounded p-2 mb-2">
-              <p className="mb-1">{file.fileName} ({formatFileSize(file.size)})</p>
+              <div className="d-flex justify-content-between align-items-center mb-2">
+                <p className="mb-0">{file.fileName} ({formatFileSize(file.size)})</p>
+                <Badge bg={file.transferType === 'p2p' ? 'primary' : 'secondary'}>
+                  {file.transferType === 'p2p' ? 'P2P' : 'Server Relay'}
+                </Badge>
+              </div>
               <a 
                 href={file.url} 
                 download={file.fileName}
