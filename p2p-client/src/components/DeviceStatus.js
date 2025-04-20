@@ -1,15 +1,17 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { Badge } from 'react-bootstrap';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { Badge, Button } from 'react-bootstrap';
 import SignalRService from '../services/SignalRService';
 
 const DeviceStatus = ({ authInfo }) => {
   const [onlineDevices, setOnlineDevices] = useState([]);
   const [debug, setDebug] = useState({lastReceived: 'none', counts: 0});
+  const [retryCount, setRetryCount] = useState(0);
+  const deviceRequestTimer = useRef(null);
+  const maxRetries = 5; // Maximum number of retries for device list requests
   
-  // eslint-disable-next-line no-unused-vars
   const { userId, deviceId } = authInfo;
   
-  // 添加调试功能 - 在UI中显示原始接收到的设备数据
+  // Add debug functionality - display raw received device data in UI
   const addDebugInfo = (deviceList) => {
     if (deviceList && Array.isArray(deviceList)) {
       setDebug({
@@ -19,11 +21,26 @@ const DeviceStatus = ({ authInfo }) => {
     }
   };
 
+  // Function to request device list that can be called from multiple places
+  // Define this before other callbacks that depend on it
+  const requestDeviceList = useCallback(() => {
+    if (SignalRService.connection && 
+        SignalRService.connection.state === 'Connected') {
+      console.log('Requesting online devices... (attempt #' + (retryCount + 1) + ')');
+      
+      // More aggressive approach: Request devices from server AND check local storage
+      SignalRService.connection.invoke('GetOnlineDevices')
+        .catch(error => console.error('Failed to request online devices:', error));
+    } else {
+      console.log('SignalR not connected, cannot request devices');
+    }
+  }, [retryCount]);
+
   // Define handlers with useCallback to avoid dependencies warning
   const handleOnlineDevices = useCallback((devices) => {
     console.log("Received online devices:", devices);
     
-    // 保存原始设备数据用于调试
+    // Save raw device data for debugging
     addDebugInfo(devices);
     
     if (!devices || !Array.isArray(devices)) {
@@ -31,19 +48,26 @@ const DeviceStatus = ({ authInfo }) => {
       return;
     }
     
-    // 输出详细的设备对象结构
-    console.log("Detailed device objects:", 
-      devices.map(d => `Device ID: ${d.id || d.Id || d.deviceId || d.DeviceId}, Last Activity: ${d.lastActivity || d.LastActivity}`).join('\n')
-    );
+    // Enhanced logging: print complete device information
+    console.log("Detailed device objects:");
+    devices.forEach((device, index) => {
+      console.log(`Device ${index + 1}:`, device);
+    });
     
-    // 标准化设备数据格式，确保每个设备对象具有预期的属性
-    const normalizedDevices = devices.map(device => ({
-      id: device.id || device.Id || device.deviceId || device.DeviceId || '', // 支持更多可能的属性名
-      lastActivity: device.lastActivity || device.LastActivity || new Date(),
-      isOnline: true // 如果设备在列表中，默认为在线
-    }));
+    // Normalize device data format, flexibly extract device IDs
+    const normalizedDevices = devices.map(device => {
+      // Try various possible ID property names
+      const deviceId = device.id || device.Id || device.deviceId || device.DeviceId || '';
+      console.log(`Device ID normalization: Original=${JSON.stringify(device)}, Extracted ID=${deviceId}`);
+      
+      return {
+        id: deviceId,
+        lastActivity: device.lastActivity || device.LastActivity || new Date(),
+        isOnline: true // If the device is in the list, default to online
+      };
+    });
     
-    // 确保设备ID不为空并且是唯一的
+    // Ensure device IDs are not empty and unique
     const validDevices = normalizedDevices
       .filter(d => d.id && d.id.length > 0)
       .filter((d, index, self) => 
@@ -52,21 +76,36 @@ const DeviceStatus = ({ authInfo }) => {
     
     console.log("Valid device list:", validDevices);
     
-    // 使用最新的设备列表完全替换状态
+    // Record the retry count
+    if (validDevices.length < 2 && retryCount < maxRetries) {
+      setRetryCount(prev => prev + 1);
+    } else if (validDevices.length >= 2) {
+      // Reset retry count when we have at least 2 devices
+      setRetryCount(0);
+    }
+    
+    // Use the latest device list to completely replace the state
     setOnlineDevices(validDevices);
     
     console.log("Final device count:", validDevices.length);
-  }, []);
+  }, [retryCount]);
 
   const handleDeviceStatusChanged = useCallback((changedDeviceId, isOnline) => {
     console.log("Device status changed:", changedDeviceId, isOnline);
+    console.log("Current device ID:", deviceId);
+    console.log("Changed device ID:", changedDeviceId);
+    
+    // Always request the full device list when a device status changes
+    requestDeviceList();
     
     setOnlineDevices(prev => {
       // Clone the previous devices array
       const updatedDevices = [...prev];
       
-      // Find existing device
-      const deviceIndex = updatedDevices.findIndex(d => d.id === changedDeviceId);
+      // Find existing device - more flexibly compare device IDs (case-insensitive)
+      const deviceIndex = updatedDevices.findIndex(d => 
+        d.id.toLowerCase() === changedDeviceId.toLowerCase()
+      );
       
       if (isOnline) {
         // If the device is online and not in the list, add it
@@ -86,7 +125,7 @@ const DeviceStatus = ({ authInfo }) => {
         }
       } else if (deviceIndex !== -1) {
         // If device is going offline and it's not the current device, remove it
-        if (changedDeviceId !== deviceId) {
+        if (changedDeviceId.toLowerCase() !== deviceId.toLowerCase()) {
           updatedDevices.splice(deviceIndex, 1);
         } else {
           // Just mark current device as offline but keep it
@@ -100,10 +139,37 @@ const DeviceStatus = ({ authInfo }) => {
       console.log("Updated devices after status change:", updatedDevices);
       return updatedDevices;
     });
-  }, [deviceId]);
+  }, [deviceId, requestDeviceList]); // Added requestDeviceList to dependency array
+
+  // Add manual refresh option for user
+  const handleManualRefresh = useCallback(() => {
+    console.log("Manual refresh requested");
+    requestDeviceList();
+  }, [requestDeviceList]);
+
+  // Add a function to combine devices from multiple sources
+  const combineDeviceList = useCallback(() => {
+    console.log("Combining device lists from multiple sources");
+    
+    // Try to get a more complete device list by checking local storage
+    // and any other sources available
+    try {
+      const storedDeviceList = localStorage.getItem('device_list_' + userId);
+      if (storedDeviceList) {
+        const parsedList = JSON.parse(storedDeviceList);
+        console.log("Found stored device list:", parsedList);
+        handleOnlineDevices(parsedList);
+      }
+    } catch (error) {
+      console.error("Error checking stored device list:", error);
+    }
+    
+    // Always request a fresh list from server
+    requestDeviceList();
+  }, [userId, handleOnlineDevices, requestDeviceList]);
 
   useEffect(() => {
-    // 确保当前设备总是显示在列表中
+    // Ensure the current device is always shown in the list
     setOnlineDevices([{
       id: deviceId,
       lastActivity: new Date(),
@@ -115,22 +181,34 @@ const DeviceStatus = ({ authInfo }) => {
     SignalRService.on('DeviceStatusChanged', handleDeviceStatusChanged);
     
     console.log('DeviceStatus: Set up event handlers');
+    console.log('Current device ID:', deviceId);
     
-    // 立即请求设备列表，同时设置定时器定期刷新
-    const requestDevices = () => {
-      if (SignalRService.connection && 
-          SignalRService.connection.state === 'Connected') {
-        console.log('Requesting online devices...');
-        SignalRService.connection.invoke('GetOnlineDevices')
-          .catch(error => console.error('Failed to request online devices:', error));
+    // Immediately request device list
+    setTimeout(() => {
+      combineDeviceList();
+    }, 1000);
+    
+    // Set up periodic requests with exponential backoff for new sessions
+    const scheduleNextRequest = () => {
+      // Clear any existing timer
+      if (deviceRequestTimer.current) {
+        clearTimeout(deviceRequestTimer.current);
       }
+      
+      // Calculate delay - more frequent initially, then back off
+      const delay = retryCount < 3 ? 3000 : // Every 3 seconds for first 3 attempts
+                   retryCount < 5 ? 5000 : // Every 5 seconds for next 2 attempts
+                   10000; // Every 10 seconds after that
+      
+      deviceRequestTimer.current = setTimeout(() => {
+        requestDeviceList();
+        // Schedule next request
+        scheduleNextRequest();
+      }, delay);
     };
     
-    // 初始请求
-    setTimeout(requestDevices, 1000);
-    
-    // 设置定期请求，每10秒刷新一次在线设备列表
-    const intervalId = setInterval(requestDevices, 10000);
+    // Start the request schedule
+    scheduleNextRequest();
     
     console.log('DeviceStatus initialized with current device ID:', deviceId);
 
@@ -139,74 +217,60 @@ const DeviceStatus = ({ authInfo }) => {
       SignalRService.on('OnlineDevices', null);
       SignalRService.on('DeviceStatusChanged', null);
       
-      // 清理定时器
-      clearInterval(intervalId);
+      // Clean up timer
+      if (deviceRequestTimer.current) {
+        clearTimeout(deviceRequestTimer.current);
+      }
     };
-  }, [deviceId, handleDeviceStatusChanged, handleOnlineDevices]);
+  }, [deviceId, userId, handleDeviceStatusChanged, handleOnlineDevices, combineDeviceList, requestDeviceList, retryCount]);
 
-  // eslint-disable-next-line no-unused-vars
-  const formatDeviceName = (id) => {
-    if (id === deviceId) {
-      return 'This device';
+  // Update local storage when our device list changes
+  useEffect(() => {
+    try {
+      if (onlineDevices.length > 0) {
+        localStorage.setItem('device_list_' + userId, JSON.stringify(onlineDevices));
+      }
+    } catch (error) {
+      console.error("Error storing device list:", error);
     }
-    return `Device ${id.substring(0, 8)}...`;
-  };
-
-  // 找出在线的其他设备的数量
-  const allDeviceIds = onlineDevices.map(d => d.id);
-  console.log("All device IDs in state:", allDeviceIds.join(', '));
-  
-  // 计算其他设备数量（不是当前设备的）
-  const otherDevices = onlineDevices.filter(d => 
-    d.isOnline !== false && d.id !== deviceId
-  );
-  
-  console.log("Other devices:", otherDevices.map(d => d.id).join(', '));
-  
-  // 计算总的连接设备数量 (自己 + 其他设备)
-  const connectedDevicesCount = 1 + otherDevices.length;
-  
-  // 添加额外调试
-  console.log(`DeviceStatus rendering: ${connectedDevicesCount} devices total ` + 
-    `(self + ${otherDevices.length} others)`);
-    
-  // 检查是否有两个设备显示的调试
-  if (connectedDevicesCount === 2) {
-    console.log("✅ SUCCESS: Both devices are now shown!");
-  } else if (otherDevices.length === 0 && onlineDevices.length > 1) {
-    console.log("🔴 ERROR: Received multiple devices but none identified as 'other'");
-    console.log("Current deviceId:", deviceId);
-    console.log("Received device IDs:", allDeviceIds);
-  }
-
-  // 调试渲染 - 输出所有设备详情
-  console.log("DeviceStatus render - all devices:", 
-    onlineDevices.map(d => `${d.id} (${d.id === deviceId ? 'self' : 'other'})`).join(', ')
-  );
+  }, [onlineDevices, userId]);
 
   return (
     <div className="mb-4">
-      <h4>Device Status</h4>
+      <div className="d-flex justify-content-between align-items-center mb-2">
+        <h4>Device Status</h4>
+        <Button 
+          variant="outline-secondary" 
+          size="sm" 
+          onClick={handleManualRefresh}
+          aria-label="Refresh devices list"
+        >
+          <span aria-hidden="true">⟳</span> Refresh
+        </Button>
+      </div>
       <p>Your Device ID: <span className="text-muted">{deviceId.substring(0, 8)}...</span></p>
       <p>
         Connected Devices: {onlineDevices.length}/2
       </p>
       
       <div>
-        {/* 显示所有设备，根据ID判断是否为本机 */}
+        {/* Display current device and other devices */}
         {onlineDevices.map(device => (
           <div key={device.id} className="mb-2">
             <Badge bg="success" className="me-2">Online</Badge>
-            {device.id === deviceId ? 'This device' : `Device ${device.id.substring(0, 8)}...`}
+            {device.id.toLowerCase() === deviceId.toLowerCase() ? 'This device' : `Device ${device.id.substring(0, 8)}...`}
           </div>
         ))}
       </div>
       
-      {/* 调试信息 - 不影响正常用户体验的隐藏面板 */}
-      <div style={{display: 'none'}}>
-        <hr />
-        <h6>Debug Info (Raw devices: {debug.counts})</h6>
-        <pre style={{fontSize: '10px', maxHeight: '200px', overflow: 'auto'}}>
+      {/* Debug panel - can be hidden by changing display to 'none' */}
+      <div style={{display: 'none', marginTop: '20px', padding: '10px', border: '1px dashed #ccc'}}>
+        <h6>Debug Info</h6>
+        <p>Raw devices count: {debug.counts}</p>
+        <p>Processed devices count: {onlineDevices.length}</p>
+        <p>Current device ID: {deviceId}</p>
+        <p>Retry count: {retryCount}/{maxRetries}</p>
+        <pre style={{fontSize: '10px', maxHeight: '150px', overflow: 'auto', background: '#f5f5f5', padding: '5px'}}>
           {debug.lastReceived}
         </pre>
       </div>
