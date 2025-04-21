@@ -214,5 +214,40 @@ namespace P2P.Services
                 return true;
             }
         }
+        
+        /// <summary>
+        /// 清理所有过期的连接
+        /// </summary>
+        public void CleanupStaleConnections()
+        {
+            lock (_lock)
+            {
+                int totalCleaned = 0;
+                
+                foreach (var user in GetAllUsers())
+                {
+                    var staleDevices = user.ConnectedDevices
+                        .Where(d => DateTime.UtcNow.Subtract(d.LastActivity).TotalMinutes > 2)
+                        .ToList();
+                    
+                    if (staleDevices.Count > 0)
+                    {
+                        Console.WriteLine($"Cleaning up {staleDevices.Count} stale device(s) for user {user.Id}");
+                        
+                        foreach (var device in staleDevices)
+                        {
+                            Console.WriteLine($"  - Removing stale device {device.Id} (last activity: {device.LastActivity})");
+                            user.ConnectedDevices.Remove(device);
+                            totalCleaned++;
+                        }
+                    }
+                }
+                
+                if (totalCleaned > 0)
+                {
+                    Console.WriteLine($"Cleaned up a total of {totalCleaned} stale connections");
+                }
+            }
+        }
     }
 }

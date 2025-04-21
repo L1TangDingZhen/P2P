@@ -20,10 +20,33 @@ namespace P2P.Hubs
             // You would add TURN servers here for production
             // Example: new { urls = "turn:turn.example.com", username = "username", credential = "password" }
         };
+        
+        // Timer for cleaning up stale connections
+        private static Timer _cleanupTimer;
 
         public P2PHub(UserService userService)
         {
             _userService = userService;
+            
+            // Initialize the cleanup timer if it hasn't been started yet
+            if (_cleanupTimer == null)
+            {
+                _cleanupTimer = new Timer(CleanupStaleConnections, null, TimeSpan.Zero, TimeSpan.FromMinutes(2));
+                Console.WriteLine("Connection cleanup timer initialized");
+            }
+        }
+        
+        private void CleanupStaleConnections(object state)
+        {
+            try
+            {
+                Console.WriteLine("Running scheduled cleanup of stale connections");
+                _userService.CleanupStaleConnections();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error in cleanup timer: {ex.Message}");
+            }
         }
 
         public async Task RegisterConnection(string userId, string deviceId)
@@ -260,6 +283,30 @@ namespace P2P.Hubs
             return Task.FromResult(_iceServers);
         }
 
+        // Client heartbeat to keep connection alive
+        public async Task Heartbeat(string userId, string deviceId)
+        {
+            var user = _userService.GetUser(userId);
+            if (user != null)
+            {
+                var device = user.ConnectedDevices.FirstOrDefault(d => d.Id == deviceId);
+                if (device != null)
+                {
+                    device.LastActivity = DateTime.UtcNow;
+                    device.IsOnline = true;
+                    Console.WriteLine($"Heartbeat received from device {deviceId} (user {userId})");
+                }
+                else
+                {
+                    Console.WriteLine($"Heartbeat: device {deviceId} not found for user {userId}");
+                }
+            }
+            else
+            {
+                Console.WriteLine($"Heartbeat: user {userId} not found");
+            }
+        }
+        
         // Submit connection diagnostic report
         public async Task SubmitConnectionDiagnostic(ConnectionDiagnostic diagnostic)
         {

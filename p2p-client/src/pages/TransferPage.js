@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { Container, Row, Col, Button, Alert, Spinner } from 'react-bootstrap';
 import DeviceStatus from '../components/DeviceStatus';
 import MessagePanel from '../components/MessagePanel';
@@ -6,6 +6,7 @@ import FileTransferPanel from '../components/FileTransferPanel';
 import ConnectionStatus from '../components/ConnectionStatus';
 import SignalRService from '../services/SignalRService';
 import WebRTCService from '../services/WebRTCService';
+import * as signalR from '@microsoft/signalr';
 
 const TransferPage = ({ authInfo, onLogout }) => {
   const [connectionError, setConnectionError] = useState('');
@@ -13,6 +14,14 @@ const TransferPage = ({ authInfo, onLogout }) => {
   const [connectionStatus, setConnectionStatus] = useState('connecting'); // 'connecting', 'connected', 'reconnecting', 'error'
   const [transferMode, setTransferMode] = useState('server'); // 'server' or 'p2p'
   const { userId, deviceId } = authInfo;
+
+  // Define disconnect handler first to avoid dependency cycle
+  const handleDisconnect = useCallback(() => {
+    console.log('Disconnecting WebRTC and SignalR connections');
+    WebRTCService.closeAllConnections();
+    SignalRService.stopConnection();
+    onLogout();
+  }, [onLogout]);
 
   useEffect(() => {
     const connectToHub = async () => {
@@ -46,6 +55,9 @@ const TransferPage = ({ authInfo, onLogout }) => {
         SignalRService.on('DeviceStatusChanged', (deviceId, isOnline) => {
           console.log('TransferPage: device status changed:', deviceId, isOnline);
         });
+        
+        // Setup window beforeunload event to try to cleanly disconnect
+        window.addEventListener('beforeunload', handleDisconnect);
         
         await SignalRService.startConnection(userId, deviceId);
         console.log('SignalR connection established successfully');
@@ -87,26 +99,32 @@ const TransferPage = ({ authInfo, onLogout }) => {
     connectToHub();
 
     return () => {
+      // Clean up event listener
+      window.removeEventListener('beforeunload', handleDisconnect);
+      
       // Clean up connections
       WebRTCService.closeAllConnections();
       SignalRService.stopConnection();
     };
-  }, [userId, deviceId]);
-
-  const handleDisconnect = () => {
-    WebRTCService.closeAllConnections();
-    SignalRService.stopConnection();
-    onLogout();
-  };
+  }, [userId, deviceId, handleDisconnect]);
 
   // 检查连接状态
   useEffect(() => {
     if (isConnected) {
-      // 每10秒更新一次传输模式
+      // 每10秒更新一次传输模式和检查连接状态
       const interval = setInterval(() => {
+        // 更新传输模式
         const status = WebRTCService.getConnectionStatus();
         if (status.transferMode !== transferMode) {
           setTransferMode(status.transferMode);
+        }
+        
+        // 检查 SignalR 连接状态，如果断开尝试重连
+        if (SignalRService.connection && 
+            SignalRService.connection.state !== signalR.HubConnectionState.Connected) {
+          console.log('Detected disconnected state, updating UI');
+          setIsConnected(false);
+          setConnectionStatus('reconnecting');
         }
       }, 10000);
       

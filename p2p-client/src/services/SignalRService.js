@@ -6,6 +6,9 @@ class SignalRService {
     this.connection = null;
     this.connectionPromise = null;
     this.reconnectAttempts = 0;
+    this.heartbeatInterval = null;
+    this.userId = null;
+    this.deviceId = null;
     this.eventHandlers = {
       // Hub-side event names
       ReceiveMessage: null,
@@ -38,6 +41,10 @@ class SignalRService {
       return this.connectionPromise;
     }
 
+    // Store userId and deviceId for heartbeat
+    this.userId = userId;
+    this.deviceId = deviceId;
+    
     console.log('Starting SignalR connection for user:', userId);
     
     try {
@@ -164,12 +171,38 @@ class SignalRService {
       await this.connection.invoke('RegisterConnection', userId, deviceId);
       console.log('Connection registered successfully');
       
+      // Start heartbeat after successful registration
+      this.startHeartbeat();
+      
       // Don't try to explicitly request online devices - 
       // the server will broadcast them as part of RegisterConnection
     } catch (error) {
       console.error('Error registering connection:', error);
       throw error;
     }
+  }
+  
+  // Start sending heartbeats to keep connection alive
+  startHeartbeat() {
+    // Clear any existing heartbeat
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+    }
+    
+    console.log('Starting heartbeat mechanism');
+    this.heartbeatInterval = setInterval(async () => {
+      if (this.connection && 
+          this.connection.state === signalR.HubConnectionState.Connected &&
+          this.userId && 
+          this.deviceId) {
+        try {
+          await this.connection.invoke('Heartbeat', this.userId, this.deviceId);
+          console.log('Heartbeat sent successfully');
+        } catch (err) {
+          console.error('Error sending heartbeat:', err);
+        }
+      }
+    }, 30000); // 每30秒发送一次
   }
 
   async sendMessage(userId, deviceId, messageContent) {
@@ -217,10 +250,20 @@ class SignalRService {
   }
 
   stopConnection() {
+    // Clear heartbeat interval
+    if (this.heartbeatInterval) {
+      console.log('Stopping heartbeat mechanism');
+      clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = null;
+    }
+    
     if (this.connection) {
+      console.log('Stopping SignalR connection');
       this.connection.stop();
       this.connection = null;
       this.connectionPromise = null;
+      this.userId = null;
+      this.deviceId = null;
     }
   }
 }

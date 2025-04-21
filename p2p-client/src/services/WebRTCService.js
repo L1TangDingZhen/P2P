@@ -10,6 +10,9 @@ class WebRTCService {
     this.isInitialized = false;
     this.pendingIceCandidates = {};
     this.transferMode = 'server'; // Default to server relay
+    this.connectionTimeouts = {}; // Track connection timeouts
+    this.fileTransfers = {}; // Track ongoing file transfers
+    this.connectionQualityData = {}; // Track connection quality metrics
     
     // Event handler callbacks
     this.eventHandlers = {
@@ -106,15 +109,27 @@ class WebRTCService {
     console.log('Using ICE servers:', this.iceServers);
     
     try {
-      // Create RTCPeerConnection with ICE servers
+      // Create RTCPeerConnection with enhanced configuration
       const peerConnection = new RTCPeerConnection({
-        iceServers: this.iceServers
+        iceServers: this.iceServers,
+        iceTransportPolicy: 'all',  // Try all possible transport methods
+        iceCandidatePoolSize: 10,   // Increase ICE candidate pool size
+        rtcpMuxPolicy: 'require'    // Reduce number of required ports
       });
       
       console.log('RTCPeerConnection created successfully');
       
       // Store the connection
       this.connections[targetDeviceId] = peerConnection;
+      
+      // Add connection timeout and fallback mechanism
+      this.connectionTimeouts[targetDeviceId] = setTimeout(() => {
+        if (peerConnection.iceConnectionState !== 'connected' &&
+            peerConnection.iceConnectionState !== 'completed') {
+          console.log('P2P connection timeout, switching to server relay');
+          this.updateTransferMode(false);
+        }
+      }, 15000); // 15 seconds timeout
       
       // Create data channel
       const dataChannel = peerConnection.createDataChannel('p2pDataChannel');
@@ -140,6 +155,16 @@ class WebRTCService {
       
       peerConnection.oniceconnectionstatechange = () => {
         console.log(`ICE connection state changed to: ${peerConnection.iceConnectionState}`);
+        
+        // Implement ICE restart when connection fails
+        if (peerConnection.iceConnectionState === 'failed') {
+          console.log('ICE connection failed, attempting restart');
+          try {
+            peerConnection.restartIce();
+          } catch (err) {
+            console.error('Error restarting ICE:', err);
+          }
+        }
       };
       
       peerConnection.onconnectionstatechange = () => {
@@ -150,6 +175,15 @@ class WebRTCService {
           console.log('=== P2P CONNECTION ESTABLISHED SUCCESSFULLY ===');
           this.reportConnectionState(targetDeviceId, true);
           this.updateTransferMode(true);
+          
+          // Clear connection timeout
+          if (this.connectionTimeouts[targetDeviceId]) {
+            clearTimeout(this.connectionTimeouts[targetDeviceId]);
+            delete this.connectionTimeouts[targetDeviceId];
+          }
+          
+          // Start monitoring connection quality
+          this.startConnectionQualityMonitoring(targetDeviceId);
         } else if (['disconnected', 'failed', 'closed'].includes(peerConnection.connectionState)) {
           console.log(`P2P connection ${peerConnection.connectionState}: ${targetDeviceId}`);
           this.reportConnectionState(targetDeviceId, false);
@@ -168,6 +202,11 @@ class WebRTCService {
       
       peerConnection.onsignalingstatechange = () => {
         console.log(`Signaling state changed to: ${peerConnection.signalingState}`);
+      };
+      
+      // Add ICE gathering state change monitoring
+      peerConnection.onicegatheringstatechange = () => {
+        console.log(`ICE gathering state: ${peerConnection.iceGatheringState}`);
       };
       
       // Store any pending ICE candidates
@@ -298,11 +337,23 @@ class WebRTCService {
         console.log('Using ICE servers:', this.iceServers);
         
         const peerConnection = new RTCPeerConnection({
-          iceServers: this.iceServers
+          iceServers: this.iceServers,
+          iceTransportPolicy: 'all',  // Try all possible transport methods
+          iceCandidatePoolSize: 10,   // Increase ICE candidate pool size
+          rtcpMuxPolicy: 'require'    // Reduce number of required ports
         });
         
         console.log('RTCPeerConnection created successfully');
         this.connections[senderDeviceId] = peerConnection;
+        
+        // Add connection timeout and fallback mechanism
+        this.connectionTimeouts[senderDeviceId] = setTimeout(() => {
+          if (peerConnection.iceConnectionState !== 'connected' &&
+              peerConnection.iceConnectionState !== 'completed') {
+            console.log('P2P connection timeout (receiver), switching to server relay');
+            this.updateTransferMode(false);
+          }
+        }, 15000); // 15 seconds timeout
         
         // Set up event listeners
         peerConnection.onicecandidate = (event) => {
@@ -323,6 +374,16 @@ class WebRTCService {
         
         peerConnection.oniceconnectionstatechange = () => {
           console.log(`ICE connection state changed to: ${peerConnection.iceConnectionState} (receiver)`);
+          
+          // Implement ICE restart when connection fails (receiver side)
+          if (peerConnection.iceConnectionState === 'failed') {
+            console.log('ICE connection failed (receiver), attempting restart');
+            try {
+              peerConnection.restartIce();
+            } catch (err) {
+              console.error('Error restarting ICE (receiver):', err);
+            }
+          }
         };
         
         peerConnection.onconnectionstatechange = () => {
@@ -333,6 +394,15 @@ class WebRTCService {
             console.log('=== P2P CONNECTION ESTABLISHED SUCCESSFULLY (RECEIVER) ===');
             this.reportConnectionState(senderDeviceId, true);
             this.updateTransferMode(true);
+            
+            // Clear connection timeout
+            if (this.connectionTimeouts[senderDeviceId]) {
+              clearTimeout(this.connectionTimeouts[senderDeviceId]);
+              delete this.connectionTimeouts[senderDeviceId];
+            }
+            
+            // Start monitoring connection quality
+            this.startConnectionQualityMonitoring(senderDeviceId);
           } else if (['disconnected', 'failed', 'closed'].includes(peerConnection.connectionState)) {
             console.log(`P2P connection ${peerConnection.connectionState}: ${senderDeviceId} (receiver)`);
             this.reportConnectionState(senderDeviceId, false);
@@ -351,6 +421,11 @@ class WebRTCService {
         
         peerConnection.onsignalingstatechange = () => {
           console.log(`Signaling state changed to: ${peerConnection.signalingState} (receiver)`);
+        };
+        
+        // Add ICE gathering state change monitoring (receiver side)
+        peerConnection.onicegatheringstatechange = () => {
+          console.log(`ICE gathering state (receiver): ${peerConnection.iceGatheringState}`);
         };
         
         // Initialize pending ICE candidates array
@@ -491,6 +566,17 @@ class WebRTCService {
 
   // Close connection with specific peer
   closeConnection(peerId) {
+    // Clear connection timeout if exists
+    if (this.connectionTimeouts[peerId]) {
+      clearTimeout(this.connectionTimeouts[peerId]);
+      delete this.connectionTimeouts[peerId];
+    }
+    
+    // Clean up connection quality monitoring
+    if (this.connectionQualityData[peerId]) {
+      delete this.connectionQualityData[peerId];
+    }
+    
     // Close and clean up peer connection
     if (this.dataChannels[peerId]) {
       try {
@@ -514,6 +600,10 @@ class WebRTCService {
       delete this.pendingIceCandidates[peerId];
     }
     
+    if (this.fileTransfers[peerId]) {
+      delete this.fileTransfers[peerId];
+    }
+    
     this.updateTransferMode(false);
     console.log('Closed WebRTC connection with peer:', peerId);
   }
@@ -523,6 +613,20 @@ class WebRTCService {
     // Close all peer connections
     Object.keys(this.connections).forEach(peerId => {
       this.closeConnection(peerId);
+    });
+    
+    // Clear all connection quality monitoring
+    Object.keys(this.connectionQualityData).forEach(peerId => {
+      if (this.connectionQualityData[peerId] && this.connectionQualityData[peerId].monitorInterval) {
+        clearInterval(this.connectionQualityData[peerId].monitorInterval);
+      }
+      delete this.connectionQualityData[peerId];
+    });
+    
+    // Clear all connection timeouts
+    Object.keys(this.connectionTimeouts).forEach(peerId => {
+      clearTimeout(this.connectionTimeouts[peerId]);
+      delete this.connectionTimeouts[peerId];
     });
     
     this.isInitialized = false;
@@ -546,6 +650,122 @@ class WebRTCService {
     }
   }
 
+  // Diagnose network capabilities
+  async diagnoseConnection() {
+    console.log('Running network diagnostics...');
+    
+    // Simple STUN connectivity test
+    const stunSuccess = await this.testStunConnectivity();
+    console.log(`STUN connectivity: ${stunSuccess ? 'Available' : 'Not available'}`);
+    
+    // Test TURN connectivity if configured
+    if (this.iceServers && this.iceServers.some(server => 
+        typeof server.urls === 'string' ? server.urls.startsWith('turn:') : 
+        server.urls.some(url => url.startsWith('turn:')))) {
+      const turnSuccess = await this.testTurnConnectivity();
+      console.log(`TURN connectivity: ${turnSuccess ? 'Available' : 'Not available'}`);
+    }
+    
+    return {
+      stunConnectivity: stunSuccess,
+      turnConnectivity: this.iceServers.some(server => 
+        typeof server.urls === 'string' ? server.urls.startsWith('turn:') : 
+        server.urls.some(url => url.startsWith('turn:')))
+    };
+  }
+  
+  // Test STUN connectivity
+  async testStunConnectivity() {
+    return new Promise(resolve => {
+      try {
+        const pc = new RTCPeerConnection({
+          iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+        });
+        
+        let stunDetected = false;
+        
+        pc.onicecandidate = (event) => {
+          if (event.candidate) {
+            if (event.candidate.candidate.indexOf('srflx') !== -1) {
+              stunDetected = true;
+            }
+          } else {
+            // ICE gathering complete
+            resolve(stunDetected);
+            pc.close();
+          }
+        };
+        
+        // Create data channel to trigger ICE gathering
+        pc.createDataChannel('stun-test');
+        pc.createOffer().then(offer => pc.setLocalDescription(offer));
+        
+        // Timeout after 5 seconds
+        setTimeout(() => {
+          if (pc.iceGatheringState !== 'complete') {
+            resolve(false);
+            pc.close();
+          }
+        }, 5000);
+        
+      } catch (error) {
+        console.error('STUN test error:', error);
+        resolve(false);
+      }
+    });
+  }
+  
+  // Test TURN connectivity
+  async testTurnConnectivity() {
+    return new Promise(resolve => {
+      try {
+        // Find a TURN server in our configuration
+        const turnServer = this.iceServers.find(server => 
+          typeof server.urls === 'string' ? server.urls.startsWith('turn:') : 
+          server.urls.some(url => url.startsWith('turn:')));
+          
+        if (!turnServer) {
+          resolve(false);
+          return;
+        }
+        
+        const pc = new RTCPeerConnection({
+          iceServers: [turnServer]
+        });
+        
+        let turnDetected = false;
+        
+        pc.onicecandidate = (event) => {
+          if (event.candidate) {
+            if (event.candidate.candidate.indexOf('relay') !== -1) {
+              turnDetected = true;
+            }
+          } else {
+            // ICE gathering complete
+            resolve(turnDetected);
+            pc.close();
+          }
+        };
+        
+        // Create data channel to trigger ICE gathering
+        pc.createDataChannel('turn-test');
+        pc.createOffer().then(offer => pc.setLocalDescription(offer));
+        
+        // Timeout after 5 seconds
+        setTimeout(() => {
+          if (pc.iceGatheringState !== 'complete') {
+            resolve(false);
+            pc.close();
+          }
+        }, 5000);
+        
+      } catch (error) {
+        console.error('TURN test error:', error);
+        resolve(false);
+      }
+    });
+  }
+
   // Get P2P connection status
   getConnectionStatus() {
     const connectedPeers = Object.entries(this.connections)
@@ -559,12 +779,238 @@ class WebRTCService {
       peerDetails: Object.entries(this.connections).map(([peerId, connection]) => ({
         peerId,
         connectionState: connection.connectionState,
-        dataChannelState: this.dataChannels[peerId]?.readyState || 'closed'
+        iceConnectionState: connection.iceConnectionState,
+        dataChannelState: this.dataChannels[peerId]?.readyState || 'closed',
+        quality: this.connectionQualityData[peerId] || null
       }))
     };
+  }
+  
+  // Monitor connection quality
+  startConnectionQualityMonitoring(peerId) {
+    const peerConnection = this.connections[peerId];
+    if (!peerConnection) return;
+    
+    const monitorInterval = setInterval(() => {
+      if (peerConnection.connectionState === 'connected') {
+        peerConnection.getStats(null).then(stats => {
+          let quality = {
+            timestamp: Date.now(),
+            rtt: null,
+            bytesSent: 0,
+            bytesReceived: 0
+          };
+          
+          stats.forEach(report => {
+            if (report.type === 'transport') {
+              if (report.currentRoundTripTime) {
+                quality.rtt = report.currentRoundTripTime * 1000; // Convert to ms
+                console.log(`Connection quality for ${peerId} - RTT: ${quality.rtt}ms`);
+              }
+              
+              if (report.bytesSent) quality.bytesSent = report.bytesSent;
+              if (report.bytesReceived) quality.bytesReceived = report.bytesReceived;
+            }
+          });
+          
+          this.connectionQualityData[peerId] = quality;
+          
+          // Adapt to network conditions if needed
+          if (quality.rtt && quality.rtt > 500) {
+            console.log('High latency detected, adapting transmission rate');
+            // Implementation would adjust chunk size or transmission rate
+          }
+        });
+      } else {
+        clearInterval(monitorInterval);
+      }
+    }, 5000);
+    
+    // Store the interval ID for cleanup
+    this.connectionQualityData[peerId] = { monitorInterval };
   }
 }
 
 // Create instance and export
 const webRTCService = new WebRTCService();
+
+// Add file and message sending methods
+webRTCService.sendMessage = function(message) {
+  if (!this.isInitialized) {
+    console.error('WebRTC service not initialized');
+    return false;
+  }
+  
+  const activeDataChannels = Object.values(this.dataChannels)
+    .filter(channel => channel.readyState === 'open');
+  
+  if (activeDataChannels.length === 0) {
+    console.error('No active data channels available for message sending');
+    return false;
+  }
+  
+  try {
+    const messageData = {
+      type: 'text',
+      content: message,
+      timestamp: new Date().toISOString()
+    };
+    
+    const messageString = JSON.stringify(messageData);
+    
+    // Send to all connected peers
+    let success = false;
+    for (const channel of activeDataChannels) {
+      try {
+        channel.send(messageString);
+        success = true;
+        console.log('Message sent successfully via P2P data channel');
+      } catch (err) {
+        console.error('Error sending message via data channel:', err);
+      }
+    }
+    
+    return success;
+  } catch (error) {
+    console.error('Error preparing message for sending:', error);
+    return false;
+  }
+};
+
+webRTCService.sendFile = function(file, onProgress) {
+  if (!this.isInitialized) {
+    console.error('WebRTC service not initialized');
+    return false;
+  }
+  
+  const activeDataChannels = Object.values(this.dataChannels)
+    .filter(channel => channel.readyState === 'open');
+  
+  if (activeDataChannels.length === 0) {
+    console.error('No active data channels available for file sending');
+    return false;
+  }
+  
+  // Only send to the first available channel for now
+  const dataChannel = activeDataChannels[0];
+  const peerId = Object.keys(this.dataChannels).find(
+    key => this.dataChannels[key] === dataChannel
+  );
+  
+  try {
+    // Create file transfer ID
+    const transferId = `file_${Date.now()}_${Math.random().toString(36).substring(2, 10)}`;
+    
+    // Send file metadata
+    const metadataPacket = {
+      type: 'file-metadata',
+      transferId: transferId,
+      fileName: file.name,
+      fileType: file.type,
+      fileSize: file.size,
+      timestamp: new Date().toISOString()
+    };
+    
+    console.log(`Starting file transfer: ${file.name} (${file.size} bytes)`);
+    dataChannel.send(JSON.stringify(metadataPacket));
+    
+    // Initialize file reader
+    const chunkSize = 16384; // 16 KB chunks
+    let offset = 0;
+    const reader = new FileReader();
+    
+    // Store file transfer state
+    this.fileTransfers[transferId] = {
+      file: file,
+      progress: 0,
+      startTime: Date.now(),
+      peerId: peerId,
+      canceled: false
+    };
+    
+    // Handle chunk reading and sending
+    reader.onload = (event) => {
+      if (this.fileTransfers[transferId].canceled) {
+        console.log(`File transfer ${transferId} canceled`);
+        return;
+      }
+      
+      // Send binary chunk
+      dataChannel.send(event.target.result);
+      
+      // Update progress
+      offset += event.target.result.byteLength;
+      const progress = Math.min(100, Math.floor((offset / file.size) * 100));
+      this.fileTransfers[transferId].progress = progress;
+      
+      if (onProgress) {
+        onProgress({
+          transferId,
+          fileName: file.name,
+          progress,
+          sent: offset,
+          total: file.size
+        });
+      }
+      
+      // Read next chunk or finish
+      if (offset < file.size) {
+        readNextChunk();
+      } else {
+        // Send transfer complete notification
+        const completePacket = {
+          type: 'file-complete',
+          transferId: transferId,
+          fileName: file.name
+        };
+        dataChannel.send(JSON.stringify(completePacket));
+        
+        console.log(`File transfer complete: ${file.name}`);
+        delete this.fileTransfers[transferId];
+      }
+    };
+    
+    reader.onerror = (error) => {
+      console.error('Error reading file:', error);
+      delete this.fileTransfers[transferId];
+    };
+    
+    // Function to read the next chunk
+    const readNextChunk = () => {
+      const slice = file.slice(offset, offset + chunkSize);
+      reader.readAsArrayBuffer(slice);
+    };
+    
+    // Start reading the first chunk
+    readNextChunk();
+    return transferId;
+    
+  } catch (error) {
+    console.error('Error sending file:', error);
+    return false;
+  }
+};
+
+webRTCService.cancelFileTransfer = function(transferId) {
+  if (this.fileTransfers[transferId]) {
+    this.fileTransfers[transferId].canceled = true;
+    
+    // Send cancel message if we can
+    const peerId = this.fileTransfers[transferId].peerId;
+    const dataChannel = this.dataChannels[peerId];
+    
+    if (dataChannel && dataChannel.readyState === 'open') {
+      const cancelPacket = {
+        type: 'file-cancel',
+        transferId: transferId
+      };
+      dataChannel.send(JSON.stringify(cancelPacket));
+    }
+    
+    delete this.fileTransfers[transferId];
+    return true;
+  }
+  return false;
+};
+
 export default webRTCService;
