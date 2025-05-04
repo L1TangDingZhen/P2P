@@ -1,4 +1,4 @@
-import { getApiBaseUrl } from './ConfigService';
+import { buildApiUrl } from './ConfigService';
 const USER_INFO_KEY = 'p2p_user_info';
 
 class AuthService {
@@ -26,10 +26,10 @@ class AuthService {
   async generateInvitationCode() {
     console.log('Generating invitation code...');
     try {
-      const apiUrl = getApiBaseUrl();
+      const apiUrl = buildApiUrl('invitation/generate');
       console.log(`Using API URL: ${apiUrl}`);
       
-      const response = await fetch(`${apiUrl}/api/invitation/generate`, {
+      const response = await fetch(apiUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
@@ -63,10 +63,10 @@ class AuthService {
     console.log('Authenticating with code:', normalizedCode);
     
     try {
-      const apiUrl = getApiBaseUrl();
+      const apiUrl = buildApiUrl('invitation/authenticate');
       console.log(`Using API URL: ${apiUrl}`);
       
-      const response = await fetch(`${apiUrl}/api/invitation/authenticate`, {
+      const response = await fetch(apiUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'

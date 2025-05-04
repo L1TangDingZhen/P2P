@@ -1,6 +1,7 @@
 using P2P.Hubs;
 using P2P.Services;
 using P2P.Models;
+using P2P.Extensions; // 添加扩展方法命名空间
 
 namespace P2P
 {

@@ -14,7 +14,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("P2P")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+7d9082453c45a5d48845228d3ed0f978b0eeeb53")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+695a9844f05d700228704bad06d2e04632bb2eee")]
 [assembly: System.Reflection.AssemblyProductAttribute("P2P")]
 [assembly: System.Reflection.AssemblyTitleAttribute("P2P")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

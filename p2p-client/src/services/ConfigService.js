@@ -12,3 +12,26 @@ export function getApiBaseUrl() {
     // 否则使用当前页面的origin
     return window.location.origin;
 }
+
+/**
+ * 获取API路径前缀
+ * 从环境变量中获取，默认为/api
+ */
+export function getApiPath() {
+    return process.env.REACT_APP_API_PATH || '/api';
+}
+
+/**
+ * 构建完整的API路径
+ * @param {string} endpoint - 不包含前缀的API端点，例如 "invitation/generate"
+ * @returns {string} 完整的API URL
+ */
+export function buildApiUrl(endpoint) {
+    const baseUrl = getApiBaseUrl();
+    const apiPath = getApiPath();
+    
+    // 确保endpoint不以/开头
+    const cleanEndpoint = endpoint.startsWith('/') ? endpoint.substring(1) : endpoint;
+    
+    return `${baseUrl}${apiPath}/${cleanEndpoint}`;
+}
