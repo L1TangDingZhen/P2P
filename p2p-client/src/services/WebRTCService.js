@@ -45,7 +45,7 @@ class WebRTCService {
     
     // Get ICE server configuration from server API
     try {
-      const response = await fetch('/api/connectiondiagnostic/ice-servers');
+      const response = await fetch('/api/p2p/connectiondiagnostic/ice-servers');
       const data = await response.json();
       this.iceServers = data.iceServers;
       console.log('Loaded WebRTC ICE servers:', this.iceServers);
@@ -901,23 +901,39 @@ webRTCService.sendFile = function(file, onProgress) {
     // Create file transfer ID
     const transferId = `file_${Date.now()}_${Math.random().toString(36).substring(2, 10)}`;
     
-    // Send file metadata
+    // Calculate optimal chunk size based on file type and network quality
+    let chunkSize = 16384; // Default 16 KB chunks
+    
+    // Adjust chunk size for video files
+    const isVideo = file.type.startsWith('video/');
+    const isLargeFile = file.size > 50 * 1024 * 1024; // 50MB
+    const connectionQuality = this.connectionQualityData[peerId];
+    
+    if (isVideo || isLargeFile) {
+      // Optimize for larger chunks to improve throughput for large files
+      // but not too large to cause UI freezing
+      chunkSize = 64 * 1024; // 64KB for videos and large files
+      
+      // If we have connection quality data and RTT is high, use smaller chunks
+      if (connectionQuality && connectionQuality.rtt && connectionQuality.rtt > 200) {
+        chunkSize = 32 * 1024; // 32KB for high latency connections
+      }
+    }
+    
+    // Send file metadata with information useful for streaming
     const metadataPacket = {
       type: 'file-metadata',
       transferId: transferId,
       fileName: file.name,
       fileType: file.type,
       fileSize: file.size,
+      chunkSize: chunkSize,
+      isStreamable: isVideo,
       timestamp: new Date().toISOString()
     };
     
-    console.log(`Starting file transfer: ${file.name} (${file.size} bytes)`);
+    console.log(`Starting file transfer: ${file.name} (${file.size} bytes) with ${chunkSize}B chunks`);
     dataChannel.send(JSON.stringify(metadataPacket));
-    
-    // Initialize file reader
-    const chunkSize = 16384; // 16 KB chunks
-    let offset = 0;
-    const reader = new FileReader();
     
     // Store file transfer state
     this.fileTransfers[transferId] = {
@@ -925,69 +941,158 @@ webRTCService.sendFile = function(file, onProgress) {
       progress: 0,
       startTime: Date.now(),
       peerId: peerId,
-      canceled: false
+      chunkSize: chunkSize,
+      canceled: false,
+      worker: null,
+      sendQueue: [],
+      inFlightChunks: 0,
+      maxConcurrentChunks: 3 // Allow sending multiple chunks in parallel
     };
     
-    // Handle chunk reading and sending
-    reader.onload = (event) => {
-      if (this.fileTransfers[transferId].canceled) {
+    // Create a web worker for file processing
+    const workerBlob = new Blob([
+      `importScripts('${window.location.origin}/services/FileTransferWorker.js');`
+    ], { type: 'application/javascript' });
+    
+    const worker = new Worker(URL.createObjectURL(workerBlob));
+    this.fileTransfers[transferId].worker = worker;
+    
+    // Handle worker messages
+    worker.onmessage = (e) => {
+      const { action, data } = e.data;
+      
+      if (this.fileTransfers[transferId]?.canceled) {
         console.log(`File transfer ${transferId} canceled`);
         return;
       }
       
-      // Send binary chunk
-      dataChannel.send(event.target.result);
-      
-      // Update progress
-      offset += event.target.result.byteLength;
-      const progress = Math.min(100, Math.floor((offset / file.size) * 100));
-      this.fileTransfers[transferId].progress = progress;
-      
-      if (onProgress) {
-        onProgress({
-          transferId,
-          fileName: file.name,
-          progress,
-          sent: offset,
-          total: file.size
-        });
+      switch (action) {
+        case 'progress_update':
+          // Update progress
+          this.fileTransfers[transferId].progress = data.progress;
+          if (onProgress) {
+            onProgress({
+              transferId,
+              fileName: file.name,
+              progress: data.progress,
+              sent: Math.floor((file.size * data.progress) / 100),
+              total: file.size
+            });
+          }
+          break;
+          
+        case 'chunk_ready':
+          // Add chunk to send queue
+          this.fileTransfers[transferId].sendQueue.push({
+            index: data.chunkIndex,
+            data: data.chunk,
+            isFinal: data.isFinal
+          });
+          this.processSendQueue(transferId);
+          break;
+          
+        case 'all_chunks_processed':
+          console.log(`All chunks processed for ${file.name}`);
+          break;
+          
+        case 'error':
+          console.error(`Worker error: ${data.message}`);
+          this.cancelFileTransfer(transferId);
+          break;
       }
-      
-      // Read next chunk or finish
-      if (offset < file.size) {
-        readNextChunk();
-      } else {
-        // Send transfer complete notification
-        const completePacket = {
-          type: 'file-complete',
-          transferId: transferId,
-          fileName: file.name
-        };
-        dataChannel.send(JSON.stringify(completePacket));
-        
-        console.log(`File transfer complete: ${file.name}`);
-        delete this.fileTransfers[transferId];
+    };
+    
+    // Start processing file in worker
+    worker.postMessage({
+      action: 'prepare_file_chunks',
+      data: {
+        file: file,
+        chunkSize: chunkSize,
+        useBase64: false  // WebRTC supports binary data
       }
-    };
+    });
     
-    reader.onerror = (error) => {
-      console.error('Error reading file:', error);
-      delete this.fileTransfers[transferId];
-    };
-    
-    // Function to read the next chunk
-    const readNextChunk = () => {
-      const slice = file.slice(offset, offset + chunkSize);
-      reader.readAsArrayBuffer(slice);
-    };
-    
-    // Start reading the first chunk
-    readNextChunk();
     return transferId;
     
   } catch (error) {
     console.error('Error sending file:', error);
     return false;
+  }
+};
+
+// Process chunks in the send queue
+webRTCService.processSendQueue = function(transferId) {
+  const transfer = this.fileTransfers[transferId];
+  if (!transfer || transfer.canceled) return;
+  
+  const dataChannel = this.dataChannels[transfer.peerId];
+  if (!dataChannel || dataChannel.readyState !== 'open') return;
+  
+  // Check datachannel buffering to prevent overwhelming it
+  const isChannelCongested = dataChannel.bufferedAmount > 1024 * 1024; // 1MB threshold
+  
+  // Process chunks if channel is not congested and we have chunks to send
+  while (!isChannelCongested && 
+         transfer.sendQueue.length > 0 && 
+         transfer.inFlightChunks < transfer.maxConcurrentChunks) {
+    
+    const chunk = transfer.sendQueue.shift();
+    transfer.inFlightChunks++;
+    
+    try {
+      // For binary data
+      if (chunk.data instanceof ArrayBuffer) {
+        dataChannel.send(chunk.data);
+      } else {
+        // For base64 encoded data (should not happen in WebRTC mode)
+        const chunkPacket = {
+          type: 'file-chunk',
+          transferId: transferId,
+          chunkIndex: chunk.index,
+          data: chunk.data
+        };
+        dataChannel.send(JSON.stringify(chunkPacket));
+      }
+      
+      // If this is the final chunk
+      if (chunk.isFinal) {
+        setTimeout(() => {
+          // Send transfer complete notification
+          const completePacket = {
+            type: 'file-complete',
+            transferId: transferId,
+            fileName: transfer.file.name
+          };
+          dataChannel.send(JSON.stringify(completePacket));
+          console.log(`File transfer complete: ${transfer.file.name}`);
+          
+          // Clean up
+          if (transfer.worker) {
+            transfer.worker.terminate();
+          }
+          delete this.fileTransfers[transferId];
+        }, 100); // Small delay to ensure all chunks are processed
+      }
+      
+      // Decrease in-flight count after successful send
+      transfer.inFlightChunks--;
+      
+      // Continue processing queue if there are more chunks
+      if (transfer.sendQueue.length > 0) {
+        // Use requestAnimationFrame to avoid blocking UI
+        requestAnimationFrame(() => this.processSendQueue(transferId));
+      }
+      
+    } catch (error) {
+      console.error('Error sending chunk:', error);
+      transfer.inFlightChunks--;
+    }
+  }
+  
+  // If channel is congested, wait and try again
+  if (isChannelCongested) {
+    console.log('DataChannel congested, throttling send rate');
+    setTimeout(() => this.processSendQueue(transferId), 100);
   }
 };
 
