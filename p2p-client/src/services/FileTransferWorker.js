@@ -1,4 +1,5 @@
 /* eslint-env worker */
+/* eslint-disable no-restricted-globals */
 // Web Worker for handling file processing
 // This worker handles file chunking, encoding/decoding and other CPU-intensive operations
 
