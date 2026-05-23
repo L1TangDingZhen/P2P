@@ -1,10 +1,18 @@
+# 部署产物 / 安装包
+*.tar
+*.tar.gz
+*.deb
+
+# 前端副本（在后端目录下的拷贝，不追踪）
+P2P/p2p-client/
+
 # 依赖目录
 node_modules/
 .cache/
 
 # 构建输出
-/build
-/dist
+build/
+dist/
 
 # Visual Studio / Visual Studio Code
 .vs/
@@ -38,6 +46,9 @@ logs
 # 系统文件
 .DS_Store
 Thumbs.db
+
+# 本地调试脚本
+test-worker.js
 
 # .NET Core
 bin/
