@@ -40,11 +40,9 @@ function initFileTransferWorker() {
   }
 
   try {
-    const workerBlob = new Blob([
-      `importScripts('${window.location.origin}/services/FileTransferWorker.js');`
-    ], { type: 'application/javascript' });
-    
-    window.fileTransferWorker = new Worker(URL.createObjectURL(workerBlob));
+    window.fileTransferWorker = new Worker(
+      new URL('../services/FileTransferWorker.js', import.meta.url)
+    );
     console.log('File transfer worker initialized');
     return window.fileTransferWorker;
   } catch (error) {

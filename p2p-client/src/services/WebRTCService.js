@@ -950,11 +950,9 @@ webRTCService.sendFile = function(file, onProgress) {
     };
     
     // Create a web worker for file processing
-    const workerBlob = new Blob([
-      `importScripts('${window.location.origin}/services/FileTransferWorker.js');`
-    ], { type: 'application/javascript' });
-    
-    const worker = new Worker(URL.createObjectURL(workerBlob));
+    const worker = new Worker(
+      new URL('./FileTransferWorker.js', import.meta.url)
+    );
     this.fileTransfers[transferId].worker = worker;
     
     // Handle worker messages
