@@ -45,7 +45,7 @@ self.onmessage = async function(e) {
   
   try {
     switch (action) {
-      case 'process_chunk_for_sending':
+      case 'process_chunk_for_sending': {
         const { chunk, index, useBase64 } = data;
         const processedChunk = await processChunkForSending(chunk, useBase64);
         self.postMessage({
@@ -57,17 +57,18 @@ self.onmessage = async function(e) {
           }
         });
         break;
-        
-      case 'process_incoming_chunk':
+      }
+
+      case 'process_incoming_chunk': {
         const { receivedChunk, chunkIndex, isBase64 } = data;
         let binaryData;
-        
+
         if (isBase64) {
           binaryData = new Uint8Array(base64ToArrayBuffer(receivedChunk));
         } else {
           binaryData = receivedChunk;
         }
-        
+
         self.postMessage({
           action: 'incoming_chunk_processed',
           data: {
@@ -76,8 +77,9 @@ self.onmessage = async function(e) {
           }
         });
         break;
-      
-      case 'prepare_file_chunks':
+      }
+
+      case 'prepare_file_chunks': {
         const { file, chunkSize, useBase64 } = data;
         const totalChunks = Math.ceil(file.size / chunkSize);
         
@@ -110,6 +112,7 @@ self.onmessage = async function(e) {
               data: {
                 chunkIndex: i,
                 chunk: processedChunk,
+                totalChunks: totalChunks,
                 isFinal: i === totalChunks - 1
               }
             });
@@ -127,12 +130,15 @@ self.onmessage = async function(e) {
           action: 'all_chunks_processed'
         });
         break;
-        
-      default:
+      }
+
+      default: {
         self.postMessage({
           action: 'error',
           data: { message: `Unknown action: ${action}` }
         });
+        break;
+      }
     }
   } catch (error) {
     self.postMessage({
