@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Badge, OverlayTrigger, Tooltip } from 'react-bootstrap';
-import { getApiBaseUrl } from '../services/ConfigService';
+import { buildApiUrl } from '../services/ConfigService';
 
 const ConnectionStatus = ({ isConnected, transferMode = 'server' }) => {
   const [serverStatus, setServerStatus] = useState('unknown');
@@ -9,10 +9,10 @@ const ConnectionStatus = ({ isConnected, transferMode = 'server' }) => {
   // 检查服务器状态
   const checkServerStatus = async () => {
     try {
-      const apiUrl = getApiBaseUrl();
-      console.log(`Health check URL: ${apiUrl}/api/connectionstatus/health`);
-      
-      const response = await fetch(`${apiUrl}/api/connectionstatus/health`, {
+      const healthUrl = buildApiUrl('connectionstatus/health');
+      console.log(`Health check URL: ${healthUrl}`);
+
+      const response = await fetch(healthUrl, {
         credentials: 'include',
         mode: 'cors',
         headers: {
