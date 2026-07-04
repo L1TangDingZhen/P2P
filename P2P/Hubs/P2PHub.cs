@@ -21,32 +21,14 @@ namespace P2P.Hubs
             // Example: new { urls = "turn:turn.example.com", username = "username", credential = "password" }
         };
         
-        // Timer for cleaning up stale connections
-        private static Timer _cleanupTimer;
+        // 过期连接的清理统一由 InvitationExpirationService 后台服务负责
 
-        public P2PHub(UserService userService)
+        private readonly ILogger<P2PHub> _logger;
+
+        public P2PHub(UserService userService, ILogger<P2PHub> logger)
         {
             _userService = userService;
-            
-            // Initialize the cleanup timer if it hasn't been started yet
-            if (_cleanupTimer == null)
-            {
-                _cleanupTimer = new Timer(CleanupStaleConnections, null, TimeSpan.Zero, TimeSpan.FromMinutes(2));
-                Console.WriteLine("Connection cleanup timer initialized");
-            }
-        }
-        
-        private void CleanupStaleConnections(object state)
-        {
-            try
-            {
-                Console.WriteLine("Running scheduled cleanup of stale connections");
-                _userService.CleanupStaleConnections();
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Error in cleanup timer: {ex.Message}");
-            }
+            _logger = logger;
         }
 
         public async Task RegisterConnection(string userId, string deviceId)
@@ -67,7 +49,7 @@ namespace P2P.Hubs
 
             // Update connection ID
             _userService.UpdateDeviceConnectionId(userId, deviceId, Context.ConnectionId);
-            Console.WriteLine($"Device {deviceId} is now connected with connection ID {Context.ConnectionId}");
+            _logger.LogInformation("Device {DeviceId} connected with connection {ConnectionId}", deviceId, Context.ConnectionId);
 
             // Add to group
             await Groups.AddToGroupAsync(Context.ConnectionId, userId);
@@ -156,9 +138,9 @@ namespace P2P.Hubs
             // Notify all devices in the group about the status change
             // Note: We're now sending to ALL clients in the group, not excluding the sender
             await Clients.Group(userId).SendAsync("DeviceStatusChanged", deviceId, isOnline);
-            
-            // Log the notification for debugging
-            Console.WriteLine($"Notifying all devices in group {userId} that device {deviceId} is now {(isOnline ? "online" : "offline")}");
+
+            _logger.LogDebug("Notified group {UserId} that device {DeviceId} is now {Status}",
+                userId, deviceId, isOnline ? "online" : "offline");
         }
 
         private async Task SendOnlineDevices(string userId)
@@ -171,26 +153,21 @@ namespace P2P.Hubs
                     .Select(d => new { d.Id, d.LastActivity })
                     .ToList();
                 
-                Console.WriteLine($"Sending {devices.Count} online devices to user {userId}");
-                foreach (var device in devices)
-                {
-                    Console.WriteLine($"  - Device {device.Id}");
-                }
-                
+                _logger.LogDebug("Sending {Count} online device(s) to user {UserId}", devices.Count, userId);
+
                 // Make sure each client gets the complete list of ALL online devices
                 // including itself (not just other devices)
                 foreach (var connectionId in _userService.GetDeviceConnectionIds(userId))
                 {
                     if (!string.IsNullOrEmpty(connectionId))
                     {
-                        Console.WriteLine($"Sending device list to connection {connectionId}");
                         await Clients.Client(connectionId).SendAsync("OnlineDevices", devices);
                     }
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error in SendOnlineDevices: {ex.Message}");
+                _logger.LogError(ex, "Error in SendOnlineDevices for user {UserId}", userId);
             }
         }
         
@@ -216,18 +193,18 @@ namespace P2P.Hubs
                 
                 if (userId != null)
                 {
-                    Console.WriteLine($"GetOnlineDevices requested by connection {Context.ConnectionId} (user {userId})");
+                    _logger.LogDebug("GetOnlineDevices requested by connection {ConnectionId} (user {UserId})", Context.ConnectionId, userId);
                     await SendOnlineDevices(userId);
                 }
                 else
                 {
-                    Console.WriteLine($"GetOnlineDevices: No user found for connection {Context.ConnectionId}");
+                    _logger.LogWarning("GetOnlineDevices: no user found for connection {ConnectionId}", Context.ConnectionId);
                     await Clients.Caller.SendAsync("Error", "User not found for this connection");
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error in GetOnlineDevices: {ex.Message}");
+                _logger.LogError(ex, "Error in GetOnlineDevices");
                 await Clients.Caller.SendAsync("Error", "An error occurred while getting online devices");
             }
         }
@@ -273,8 +250,8 @@ namespace P2P.Hubs
                 LastChecked = DateTime.UtcNow
             };
 
-            // Log the connection state for debugging
-            Console.WriteLine($"WebRTC connection between {deviceId} and {targetDeviceId} is {(isDirectConnection ? "direct P2P" : "relayed")}");
+            _logger.LogInformation("WebRTC connection between {DeviceId} and {TargetDeviceId} is {Mode}",
+                deviceId, targetDeviceId, isDirectConnection ? "direct P2P" : "relayed");
         }
 
         // Get WebRTC connection capabilities
@@ -294,16 +271,16 @@ namespace P2P.Hubs
                 {
                     device.LastActivity = DateTime.UtcNow;
                     device.IsOnline = true;
-                    Console.WriteLine($"Heartbeat received from device {deviceId} (user {userId})");
+                    _logger.LogDebug("Heartbeat received from device {DeviceId} (user {UserId})", deviceId, userId);
                 }
                 else
                 {
-                    Console.WriteLine($"Heartbeat: device {deviceId} not found for user {userId}");
+                    _logger.LogWarning("Heartbeat: device {DeviceId} not found for user {UserId}", deviceId, userId);
                 }
             }
             else
             {
-                Console.WriteLine($"Heartbeat: user {userId} not found");
+                _logger.LogWarning("Heartbeat: user {UserId} not found", userId);
             }
         }
         
@@ -317,14 +294,17 @@ namespace P2P.Hubs
                 return;
             }
 
-            Console.WriteLine($"Connection diagnostic from device {diagnostic.DeviceId}:");
-            Console.WriteLine($"  STUN: {(diagnostic.HasStunConnectivity ? "Available" : "Not available")}");
-            Console.WriteLine($"  TURN: {(diagnostic.HasTurnConnectivity ? "Available" : "Not available")}");
-            Console.WriteLine($"  Peer connections: {diagnostic.PeerConnections.Count}");
-            
+            _logger.LogInformation(
+                "Connection diagnostic from device {DeviceId}: STUN={Stun}, TURN={Turn}, peers={PeerCount}",
+                diagnostic.DeviceId,
+                diagnostic.HasStunConnectivity ? "available" : "unavailable",
+                diagnostic.HasTurnConnectivity ? "available" : "unavailable",
+                diagnostic.PeerConnections.Count);
+
             foreach (var peer in diagnostic.PeerConnections)
             {
-                Console.WriteLine($"  - Peer {peer.PeerId}: {(peer.IsConnected ? "Connected" : "Not connected")} ({peer.ConnectionType})");
+                _logger.LogDebug("  Peer {PeerId}: {State} ({ConnectionType})",
+                    peer.PeerId, peer.IsConnected ? "connected" : "not connected", peer.ConnectionType);
             }
         }
 
@@ -343,7 +323,7 @@ namespace P2P.Hubs
                     userId = user.Id;
                     deviceId = device.Id;
                     device.IsOnline = false;
-                    Console.WriteLine($"Device {deviceId} disconnected (connection {Context.ConnectionId})");
+                    _logger.LogInformation("Device {DeviceId} disconnected (connection {ConnectionId})", deviceId, Context.ConnectionId);
                     break;
                 }
             }
@@ -362,18 +342,14 @@ namespace P2P.Hubs
                     .Select(d => new { d.Id, d.LastActivity })
                     .ToList();
                 
-                Console.WriteLine($"Broadcasting updated device list after disconnect:");
-                foreach (var d in devices)
-                {
-                    Console.WriteLine($"  - Device {d.Id}");
-                }
-                
+                _logger.LogDebug("Broadcasting updated device list ({Count} device(s)) after disconnect", devices.Count);
+
                 // Send updated list to all remaining devices
                 await Clients.Group(userId).SendAsync("OnlineDevices", devices);
             }
             else
             {
-                Console.WriteLine($"Disconnection for unknown device (connection {Context.ConnectionId})");
+                _logger.LogDebug("Disconnection for unknown device (connection {ConnectionId})", Context.ConnectionId);
             }
 
             await base.OnDisconnectedAsync(exception);

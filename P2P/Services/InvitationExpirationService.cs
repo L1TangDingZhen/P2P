@@ -26,6 +26,9 @@ namespace P2P.Services
                 try
                 {
                     CheckAndExpireInvitations();
+
+                    // 清理长时间无活动的设备连接（原先由 P2PHub 内的 Timer 负责，统一合并到这里）
+                    _userService.CleanupStaleConnections();
                 }
                 catch (Exception ex)
                 {
