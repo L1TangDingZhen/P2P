@@ -11,21 +11,28 @@ namespace P2P
         {
             var builder = WebApplication.CreateBuilder(args);
 
-            // comment out when publishing
-            builder.WebHost.ConfigureKestrel(serverOptions =>
+            // 仅开发环境监听所有网卡（方便局域网真机调试）；生产环境由 ASPNETCORE_URLS 环境变量控制
+            if (builder.Environment.IsDevelopment())
             {
-                serverOptions.ListenAnyIP(5235); // 监听所有网络接口的5235端口
-            });
+                builder.WebHost.ConfigureKestrel(serverOptions =>
+                {
+                    serverOptions.ListenAnyIP(5235);
+                });
+            }
             // Add services to the container.
             builder.Services.AddSingleton<UserService>();
             
             // 添加邀请码过期后台服务
             builder.Services.AddHostedService<InvitationExpirationService>();
             
-            // 增强的CORS配置，解决SignalR跨域问题
+            // CORS白名单：从环境变量 ALLOWED_ORIGINS 读取（逗号分隔），未设置时回退到本地开发地址
+            var allowedOrigins = (Environment.GetEnvironmentVariable("ALLOWED_ORIGINS")
+                    ?? "http://localhost:3000,http://localhost:8080")
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
             builder.Services.AddCors(options => {
-                options.AddPolicy("CorsPolicy", policy => 
-                    policy.SetIsOriginAllowed(_ => true) // 允许任何来源
+                options.AddPolicy("CorsPolicy", policy =>
+                    policy.WithOrigins(allowedOrigins)
                           .AllowAnyMethod()
                           .AllowAnyHeader()
                           .AllowCredentials() // 允许凭据
@@ -70,13 +77,10 @@ namespace P2P
             // 映射SignalR集线器并应用CORS策略
             app.MapHub<P2PHub>("/p2phub").RequireCors("CorsPolicy");
 
-            // 打印启动确认
-            Console.WriteLine("\n============================");
-            Console.WriteLine("P2P Application started!");
-            Console.WriteLine($"Server IP: {GetLocalIPAddress()}");
-            Console.WriteLine("API available at: http://localhost:5235/api");
-            Console.WriteLine("SignalR hub available at: http://localhost:5235/p2phub");
-            Console.WriteLine("============================\n");
+            // 启动信息
+            app.Logger.LogInformation("Allowed CORS origins: {Origins}", string.Join(", ", allowedOrigins));
+            app.Logger.LogInformation("P2P application started. Server IP: {ServerIp}. API: /api, SignalR hub: /p2phub",
+                GetLocalIPAddress());
 
             app.Run();
         }
@@ -95,9 +99,9 @@ namespace P2P
                     }
                 }
             }
-            catch (Exception ex)
+            catch
             {
-                Console.WriteLine($"Error getting IP address: {ex.Message}");
+                // DNS 查询失败时回退到 localhost，无需记录
             }
             return "localhost";
         }
